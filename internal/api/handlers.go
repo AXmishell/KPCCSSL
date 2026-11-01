@@ -341,14 +341,14 @@ func (s *Server) downloadJobLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := s.Svc.Logs.Path(id)
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(path); err != nil { // #nosec G703 -- path is <log-dir>/<validated-job-id>.log
 		writeProblem(w, r, http.StatusNotFound, "E_NOT_FOUND", "job log not found", nil)
 		return
 	}
 	s.audit(r, "job.log.download", "job", id, "ok", "")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", id+".log"))
-	http.ServeFile(w, r, path)
+	http.ServeFile(w, r, path) // #nosec G703 -- path is <log-dir>/<validated-job-id>.log
 }
 
 func (s *Server) jobEvents(w http.ResponseWriter, r *http.Request) {
@@ -770,7 +770,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 			buf.Write(key)
 			s.audit(r, "certificate.private_key.download", "certificate", id, "ok", "revision="+rev.ID)
 		}
-		full, err := os.ReadFile(rev.FullchainPath)
+		full, err := os.ReadFile(rev.FullchainPath) // #nosec G703 -- path comes from the certificate revision row
 		if err != nil {
 			s.fail(w, r, err)
 			return

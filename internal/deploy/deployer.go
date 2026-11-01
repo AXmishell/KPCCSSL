@@ -362,7 +362,7 @@ func atomicCopy(src, dst string, mode os.FileMode, backup bool) error {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(dst+".bak", data, mode); err != nil {
+			if err := os.WriteFile(dst+".bak", data, mode); err != nil { // #nosec G703 -- dst is validated by safeJoin/safeDir
 				return err
 			}
 		}
@@ -391,7 +391,7 @@ func atomicCopy(src, dst string, mode os.FileMode, backup bool) error {
 	if err := os.Rename(tmpName, dst); err != nil {
 		if backup {
 			if data, rerr := os.ReadFile(dst + ".bak"); rerr == nil {
-				_ = os.WriteFile(dst, data, mode)
+				_ = os.WriteFile(dst, data, mode) // #nosec G703 -- dst is validated by safeJoin/safeDir
 			}
 		}
 		return err

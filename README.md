@@ -1,5 +1,9 @@
 # KPCCSSL
 
+[![CI](https://github.com/AXmishell/KPCCSSL/actions/workflows/ci.yml/badge.svg)](https://github.com/AXmishell/KPCCSSL/actions/workflows/ci.yml)
+[![Release](https://github.com/AXmishell/KPCCSSL/actions/workflows/release.yml/badge.svg)](https://github.com/AXmishell/KPCCSSL/actions/workflows/release.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 自托管的 Web 证书签发与管理工具：Go 后端 + React SPA + SQLite，ACME 引擎使用固定版本的 [acme.sh](https://github.com/acmesh-official/acme.sh)。
 
 > 当前状态：**Phase 0–4 的 MVP 主链路已实现**（认证、CA/DNS/证书管理、DNS-01 签发、任务队列、实时日志、续期、吊销、部署、通知、审计、下载）。真实 acme.sh + Pebble 的 HTTP-01 已验证；真实 DNS provider 的 staging 签发（P0-10）仍需在目标环境完成，见 [PROJECT.md](PROJECT.md)。
@@ -127,6 +131,40 @@ make scan
 ```
 
 API 契约见 [docs/openapi.yaml](docs/openapi.yaml)，运行/备份/升级见 [docs/runbook.md](docs/runbook.md)，实施计划见 [PROJECT.md](PROJECT.md)。
+
+## CI / 发布自动化
+
+GitHub Actions 工作流：
+
+- `.github/workflows/ci.yml`
+  - Go：gofmt、`go vet`、`go test -race` + 覆盖率
+  - Web：TypeScript、Vitest、生产构建
+  - E2E：Playwright 完整签发/下载流程（fake ACME）
+  - Docker：构建镜像、容器启动健康检查、容器内 `doctor`
+  - 安全：govulncheck、gosec(high/high)、npm audit、Trivy
+  - Workflow lint：actionlint
+- `.github/workflows/release.yml`
+  - 推送 `v*` tag 后构建 linux/amd64 + arm64 单二进制、生成 SHA-256
+  - 构建并推送多架构镜像到 `ghcr.io/axmishell/kpccssl`
+  - 自动创建 GitHub Release
+- `.github/dependabot.yml`：每周更新 Go、npm、Actions、Docker 依赖
+
+发布：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+镜像标签：`ghcr.io/axmishell/kpccssl:v0.1.0`、`:0.1`、`:latest`。仓库需允许 Actions 写入 Packages（默认 `GITHUB_TOKEN` 即可）。
+
+本地复现 CI：
+
+```bash
+make lint test build
+make e2e
+make scan
+```
 
 ## 安全要点
 

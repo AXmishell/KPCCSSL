@@ -5,7 +5,7 @@ COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 DEV_DATA := $(CURDIR)/.data
 
-.PHONY: help deps web build dev dev-api dev-web test test-go test-web lint e2e docker docker-run migrate-up sqlc scan clean
+.PHONY: help deps web build dev dev-api dev-web test test-go test-web lint ci e2e docker docker-run migrate-up sqlc scan clean
 
 help:
 	@echo "KPCCSSL targets:"
@@ -15,6 +15,7 @@ help:
 	@echo "  make dev         run API (fake ACME) and Vite together"
 	@echo "  make test        run Go and frontend tests"
 	@echo "  make lint        go vet + frontend typecheck"
+	@echo "  make ci          lint + tests + build (local CI equivalent)"
 	@echo "  make e2e         Playwright end-to-end tests"
 	@echo "  make docker      build the container image"
 	@echo "  make migrate-up  apply database migrations"
@@ -58,6 +59,8 @@ lint:
 	@out="$$(gofmt -l cmd internal migrations)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	go vet ./...
 	cd web && npm run typecheck
+
+ci: lint test build
 
 e2e: web
 	cd web && npx playwright install --with-deps chromium >/dev/null 2>&1 || true

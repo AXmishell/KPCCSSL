@@ -39,7 +39,7 @@ func ScrubEAB(home string) ([]string, error) {
 			kept = append(kept, line)
 		}
 		if changed {
-			if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0o600); err != nil { // #nosec G703 -- path comes from WalkDir under the acme home
 				return touched, err
 			}
 			touched = append(touched, path)

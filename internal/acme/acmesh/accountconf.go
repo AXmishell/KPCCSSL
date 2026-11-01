@@ -102,7 +102,7 @@ func ScrubSavedCredentials(home string) ([]string, error) {
 		if !changed {
 			return nil
 		}
-		if err := os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600); err != nil { // #nosec G703 -- path comes from WalkDir under the acme home
 			return err
 		}
 		touched = append(touched, path)
