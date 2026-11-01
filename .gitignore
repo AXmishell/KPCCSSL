@@ -1,0 +1,162 @@
+# ============================================================
+# KPCCSSL .gitignore
+# Go + React SPA + SQLite + Docker
+# ============================================================
+
+# ---------- 本地数据 / 密钥 / 证书 ----------
+/.data/
+# 运行时的持久化数据，绝不入库
+/data/
+/certs/
+/secrets/
+/.secrets/
+master.key
+*.secret
+credentials.json
+
+# 证书与私钥（测试夹具除外）
+*.pem
+*.key
+*.crt
+*.cer
+*.csr
+*.pfx
+*.p12
+!**/testdata/**/*.pem
+!**/testdata/**/*.crt
+!**/testdata/**/*.cer
+!**/testdata/**/*.key
+!**/testdata/**/*.csr
+!**/testdata/**/*.pfx
+!**/testdata/**/*.p12
+
+# 数据库
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---------- 环境变量 ----------
+.env
+.env.*
+!.env.example
+*.local
+
+# ---------- Go ----------
+# 构建产物
+/kpccssl
+/kpccssl.exe
+/kpccssl-*
+/bin/
+/build/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试与覆盖率
+*.test
+*.out
+coverage.out
+coverage.html
+*.coverprofile
+
+# 性能分析
+*.prof
+cpu.out
+mem.out
+block.out
+mutex.out
+trace.out
+
+# 调试
+__debug_bin*
+*.test.exe
+
+# Go 工具缓存（一般不在仓库内，防御性忽略）
+/.cache/go-build/
+/go/pkg/
+
+# ---------- 前端 / Node ----------
+node_modules/
+web/node_modules/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/install-state.gz
+
+# 构建产物
+web/dist/
+web/.vite/
+.vite/
+.parcel-cache/
+.turbo/
+.next/
+.nuxt/
+storybook-static/
+
+# 测试
+coverage/
+.nyc_output/
+playwright-report/
+blob-report/
+test-results/
+playwright/.cache/
+
+# 缓存
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# 包管理器日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------- 日志 / 临时文件 ----------
+*.log
+logs/
+/tmp/
+/.tmp/
+.cache/
+*.pid
+*.pid.lock
+*.seed
+*.swp
+*.swo
+*~
+
+# ---------- 操作系统 ----------
+.DS_Store
+._*
+.Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------- 编辑器 / IDE ----------
+.idea/
+.vscode/
+.fleet/
+.history/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# ---------- 其他 ----------
+# 本地备份
+*.bak
+*.backup
+
+# 崩溃转储
+core
+core.*
+*.core

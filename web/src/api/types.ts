@@ -1,0 +1,237 @@
+export type Role = "admin" | "operator" | "viewer";
+
+export interface User {
+  id: string;
+  email: string;
+  role: Role;
+  disabled: boolean;
+  totp_enabled: boolean;
+  created_at: number;
+}
+
+export interface CAAccount {
+  id: string;
+  name: string;
+  directory_url: string;
+  is_staging: boolean;
+  email: string | null;
+  eab_kid: string | null;
+  status: "new" | "registered" | "error" | "disabled";
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CAPreset {
+  id: string;
+  name: string;
+  directory_url: string;
+  staging: boolean;
+  needs_eab: boolean;
+}
+
+export interface DNSField {
+  key: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  help?: string;
+}
+
+export interface DNSProvider {
+  id: string;
+  name: string;
+  docs: string;
+  min_role: string;
+  fields: DNSField[];
+  wildcard: boolean;
+}
+
+export interface DNSCredential {
+  id: string;
+  name: string;
+  provider: string;
+  status: "unverified" | "ok" | "error";
+  last_error: string | null;
+  last_used_at: number | null;
+  configured_fields: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+export type ChallengeType = "dns-01" | "http-01-webroot" | "http-01-standalone" | "tls-alpn-01";
+export type CertificateStatus = "draft" | "queued" | "issuing" | "active" | "renewing" | "failed" | "revoked" | "disabled";
+
+export interface CertificateOptions {
+  preferred_chain?: string;
+  dns_alias?: string;
+  dns_sleep?: number;
+  always_new_key?: boolean;
+  must_staple?: boolean;
+}
+
+export interface Certificate {
+  id: string;
+  name: string;
+  primary_domain: string;
+  san: string[];
+  key_type: string;
+  ca_account_id: string;
+  challenge_type: ChallengeType;
+  dns_credential_id: string | null;
+  webroot: string | null;
+  options: CertificateOptions;
+  auto_renew: boolean;
+  status: CertificateStatus;
+  current_revision_id: string | null;
+  next_renew_at: number | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  version: number;
+  deleted_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Revision {
+  id: string;
+  certificate_id: string;
+  serial: string;
+  fingerprint_sha256: string;
+  not_before: number;
+  not_after: number;
+  issued_at: number;
+  revoked_at: number | null;
+  revoke_reason: number | null;
+  created_at: number;
+}
+
+export interface Job {
+  id: string;
+  type: "register_account" | "issue" | "renew" | "revoke" | "deploy" | "sync";
+  certificate_id: string | null;
+  ca_account_id: string | null;
+  status: "queued" | "running" | "succeeded" | "failed" | "canceled" | "interrupted";
+  attempts: number;
+  max_attempts: number;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  heartbeat_at: number | null;
+}
+
+export interface CertEvent {
+  id: number;
+  certificate_id: string;
+  type: string;
+  message: string | null;
+  job_id: string | null;
+  created_at: number;
+}
+
+export interface Deployment {
+  id: string;
+  certificate_id: string;
+  name: string;
+  type: "local_file" | "reload" | "webhook";
+  enabled: boolean;
+  last_run_at: number | null;
+  last_status: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: "smtp" | "webhook" | "telegram";
+  events: string[];
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AuditLog {
+  id: string;
+  actor_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  request_id: string | null;
+  result: "ok" | "denied" | "error";
+  detail_json: string | null;
+  created_at: number;
+}
+
+export interface CertificateDetail {
+  certificate: Certificate;
+  ca_account: CAAccount | null;
+  dns_credential: DNSCredential | null;
+  current_revision: Revision | null;
+  deployments: Deployment[];
+  jobs: Job[];
+}
+
+export interface Dashboard {
+  certificates: { total: number; expiring_30d: number; failed: number; active: number };
+  jobs: Record<string, number>;
+  recent_jobs: Job[];
+}
+
+export interface SystemInfo {
+  version: string;
+  acme_version: string;
+  setup_required: boolean;
+  data_dir: string;
+  disk_free_bytes: number;
+  server_time: number;
+  fake_acme: boolean;
+}
+
+export interface Problem {
+  type: string;
+  title: string;
+  status: number;
+  code: string;
+  detail?: string;
+  request_id?: string;
+  fields?: Record<string, string>;
+}
+
+export interface Page<T> {
+  items: T[];
+  next_cursor?: number | null;
+}
+
+export interface CAInput {
+  name: string;
+  directory_url: string;
+  is_staging: boolean;
+  email: string;
+  eab_kid: string;
+  eab_hmac_key: string;
+}
+
+export interface DNSInput {
+  name: string;
+  provider: string;
+  config: Record<string, string>;
+}
+
+export interface CertInput {
+  name: string;
+  primary_domain: string;
+  san: string[];
+  key_type: string;
+  ca_account_id: string;
+  challenge_type: ChallengeType;
+  dns_credential_id?: string;
+  webroot?: string;
+  options?: CertificateOptions;
+  auto_renew: boolean;
+  version?: number;
+}

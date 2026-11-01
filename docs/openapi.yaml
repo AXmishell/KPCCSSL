@@ -1,0 +1,666 @@
+openapi: 3.1.0
+info:
+  title: KPCCSSL API
+  version: 0.1.0
+  description: |
+    Self-hosted ACME certificate manager. Session authentication uses an
+    HttpOnly cookie; every mutating request additionally requires the
+    `X-CSRF-Token` value returned by `/auth/login` or `/me`.
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+paths:
+  /system/health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        "200":
+          description: Liveness
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  version: { type: string }
+                  setup_required: { type: boolean }
+  /setup:
+    post:
+      security: []
+      operationId: setup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, email, password]
+              properties:
+                token: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 12 }
+      responses:
+        "201": { $ref: "#/components/responses/AuthResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+  /auth/login:
+    post:
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+                totp_code: { type: string }
+                recovery_code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/AuthResult" }
+        "401": { $ref: "#/components/responses/Problem" }
+  /auth/logout:
+    post:
+      operationId: logout
+      responses:
+        "204": { description: Signed out }
+  /me:
+    get:
+      operationId: me
+      responses:
+        "200": { $ref: "#/components/responses/AuthResult" }
+  /certificates:
+    get:
+      operationId: listCertificates
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Certificates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Certificate" }
+                  next_cursor: { type: [integer, "null"] }
+    post:
+      operationId: createCertificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CertificateInput" }
+      responses:
+        "201":
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /certificates/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getCertificate
+      responses:
+        "200":
+          description: Certificate detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificate: { $ref: "#/components/schemas/Certificate" }
+                  current_revision: { $ref: "#/components/schemas/Revision" }
+    patch:
+      operationId: updateCertificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CertificateInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteCertificate
+      responses:
+        "204": { description: Soft-deleted }
+  /certificates/{id}/issue:
+    post:
+      operationId: issueCertificate
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+  /certificates/{id}/renew:
+    post:
+      operationId: renewCertificate
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+  /certificates/{id}/revoke:
+    post:
+      operationId: revokeCertificate
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+  /certificates/{id}/revisions:
+    get:
+      operationId: listRevisions
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Revisions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Revision" }
+  /certificates/{id}/download:
+    get:
+      operationId: downloadCertificate
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: format, in: query, schema: { type: string, enum: [pem, zip] }, description: "ZIP contains the private key; requires operator role and X-Confirm-Private-Key: yes" }
+        - { name: revision, in: query, schema: { type: string } }
+        - { name: key, in: query, schema: { type: boolean }, description: "Requires operator role and X-Confirm-Private-Key: yes" }
+        - { name: X-Confirm-Private-Key, in: header, schema: { type: string, enum: [yes] } }
+      responses:
+        "200": { description: Binary file }
+    post:
+      operationId: exportPFX
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, minLength: 8 }
+                revision: { type: string }
+      responses:
+        "200": { description: PKCS#12 file }
+  /jobs:
+    get:
+      operationId: listJobs
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: certificate_id, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200 } }
+      responses:
+        "200":
+          description: Jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Job" }
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+  /jobs/{id}/events:
+    get:
+      operationId: jobEvents
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: |
+            Server-sent events: `job.log` (id = sequence), `job.status`, `job.done`.
+            Supports Last-Event-ID and `?after=`.
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /ca-accounts:
+    get:
+      operationId: listCAAccounts
+      responses:
+        "200":
+          description: CA accounts and presets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/CAAccount" }
+                  presets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        directory_url: { type: string }
+                        staging: { type: boolean }
+                        needs_eab: { type: boolean }
+    post:
+      operationId: createCAAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CAInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CAAccount" }
+  /ca-accounts/{id}/register:
+    post:
+      operationId: registerCAAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+  /dns-providers:
+    get:
+      operationId: listDNSProviders
+      responses:
+        "200":
+          description: Static provider catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DNSProvider" }
+  /dns-credentials:
+    get:
+      operationId: listDNSCredentials
+      responses:
+        "200":
+          description: Masked credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DNSCredential" }
+    post:
+      operationId: createDNSCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, provider, config]
+              properties:
+                name: { type: string }
+                provider: { type: string }
+                config:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DNSCredential" }
+  /deployments:
+    get:
+      operationId: listDeployments
+      parameters:
+        - { name: certificate_id, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Deployments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Deployment" }
+    post:
+      operationId: createDeployment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deployment" }
+  /notification-channels:
+    get:
+      operationId: listNotificationChannels
+      responses:
+        "200":
+          description: Channels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/NotificationChannel" }
+                  events:
+                    type: array
+                    items: { type: string }
+  /audit-logs:
+    get:
+      operationId: listAuditLogs
+      responses:
+        "200":
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditLog" }
+  /settings:
+    get:
+      operationId: getSettings
+      responses:
+        "200":
+          description: Settings map
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    patch:
+      operationId: updateSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /system/info:
+    get:
+      operationId: systemInfo
+      responses:
+        "200":
+          description: Version, disk and acme.sh information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  acme_version: { type: string }
+                  setup_required: { type: boolean }
+                  data_dir: { type: string }
+                  disk_free_bytes: { type: integer }
+                  server_time: { type: integer }
+                  fake_acme: { type: boolean }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-kpccssl_session
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string, maxLength: 128 }
+  responses:
+    AuthResult:
+      description: Authenticated user and CSRF token
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              user: { $ref: "#/components/schemas/User" }
+              csrf_token: { type: string }
+    Accepted:
+      description: Asynchronous job accepted
+      headers:
+        Location:
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              job_id: { type: string }
+    Problem:
+      description: RFC 7807 problem document
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [admin, operator, viewer] }
+        disabled: { type: boolean }
+        totp_enabled: { type: boolean }
+        created_at: { type: integer }
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        request_id: { type: string }
+        fields:
+          type: object
+          additionalProperties: { type: string }
+    Certificate:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        primary_domain: { type: string }
+        san:
+          type: array
+          items: { type: string }
+        key_type: { type: string, enum: [ec-256, ec-384, rsa-2048, rsa-3072, rsa-4096] }
+        ca_account_id: { type: string }
+        challenge_type: { type: string, enum: [dns-01, http-01-webroot, http-01-standalone, tls-alpn-01] }
+        dns_credential_id: { type: [string, "null"] }
+        webroot: { type: [string, "null"] }
+        auto_renew: { type: boolean }
+        status: { type: string, enum: [draft, queued, issuing, active, renewing, failed, revoked, disabled] }
+        current_revision_id: { type: [string, "null"] }
+        next_renew_at: { type: [integer, "null"] }
+        last_error_code: { type: [string, "null"] }
+        last_error_message: { type: [string, "null"] }
+        version: { type: integer }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    CertificateInput:
+      type: object
+      required: [primary_domain, key_type, ca_account_id, challenge_type]
+      properties:
+        name: { type: string }
+        primary_domain: { type: string }
+        san:
+          type: array
+          items: { type: string }
+        key_type: { type: string }
+        ca_account_id: { type: string }
+        challenge_type: { type: string }
+        dns_credential_id: { type: string }
+        webroot: { type: string }
+        auto_renew: { type: boolean }
+        version: { type: integer }
+    Revision:
+      type: object
+      properties:
+        id: { type: string }
+        certificate_id: { type: string }
+        serial: { type: string }
+        fingerprint_sha256: { type: string }
+        not_before: { type: integer }
+        not_after: { type: integer }
+        issued_at: { type: integer }
+    Job:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [register_account, issue, renew, revoke, deploy, sync] }
+        status: { type: string, enum: [queued, running, succeeded, failed, canceled, interrupted] }
+        attempts: { type: integer }
+        max_attempts: { type: integer }
+        certificate_id: { type: [string, "null"] }
+        error_code: { type: [string, "null"] }
+        error_message: { type: [string, "null"] }
+        created_at: { type: integer }
+        started_at: { type: [integer, "null"] }
+        finished_at: { type: [integer, "null"] }
+    CAAccount:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        directory_url: { type: string }
+        is_staging: { type: boolean }
+        email: { type: [string, "null"] }
+        eab_kid: { type: [string, "null"] }
+        tos_accepted_at: { type: [integer, "null"] }
+        status: { type: string, enum: [new, registered, error, disabled] }
+        last_error: { type: [string, "null"] }
+    CAInput:
+      type: object
+      required: [name, directory_url]
+      properties:
+        name: { type: string }
+        directory_url: { type: string }
+        is_staging: { type: boolean }
+        email: { type: string }
+        eab_kid: { type: string }
+        eab_hmac_key: { type: string }
+        tos_accepted: { type: boolean }
+    DNSProvider:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        docs: { type: string }
+        min_role: { type: string }
+        wildcard: { type: boolean }
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              label: { type: string }
+              secret: { type: boolean }
+              required: { type: boolean }
+              help: { type: string }
+    DNSCredential:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        provider: { type: string }
+        status: { type: string, enum: [unverified, ok, error] }
+        last_error: { type: [string, "null"] }
+        last_used_at: { type: [integer, "null"] }
+        configured_fields:
+          type: array
+          items: { type: string }
+    Deployment:
+      type: object
+      properties:
+        id: { type: string }
+        certificate_id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [local_file, reload, webhook] }
+        enabled: { type: boolean }
+        last_run_at: { type: [integer, "null"] }
+        last_status: { type: [string, "null"] }
+    DeploymentInput:
+      type: object
+      required: [certificate_id, name, type, config]
+      properties:
+        certificate_id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [local_file, reload, webhook] }
+        config: { type: object, additionalProperties: true }
+        enabled: { type: boolean }
+    NotificationChannel:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [smtp, webhook, telegram] }
+        events:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean }
+    AuditLog:
+      type: object
+      properties:
+        id: { type: string }
+        actor_id: { type: [string, "null"] }
+        action: { type: string }
+        resource_type: { type: string }
+        resource_id: { type: [string, "null"] }
+        result: { type: string, enum: [ok, denied, error] }
+        ip: { type: [string, "null"] }
+        created_at: { type: integer }

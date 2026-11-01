@@ -1,0 +1,36 @@
+[Unit]
+Description=KPCCSSL certificate manager
+Documentation=https://github.com/axmishell/kpccssl
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kpccssl
+Group=kpccssl
+ExecStart=/usr/local/bin/kpccssl serve
+Restart=on-failure
+RestartSec=5s
+Environment=KPCC_DATA_DIR=/var/lib/kpccssl
+Environment=KPCC_LISTEN=127.0.0.1:8080
+Environment=KPCC_ACME_BIN=/opt/acme.sh/acme.sh
+Environment=KPCC_LOG_LEVEL=info
+# Local file deployments must be inside this allow-list.
+Environment=KPCC_DEPLOY_ROOTS=/etc/nginx/certs
+# Hardening: the service only needs its data directory and acme home.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kpccssl
+# Optional write roots for local file deploys and HTTP-01 webroot.
+ReadWritePaths=-/etc/nginx/certs
+ReadWritePaths=-/var/www
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

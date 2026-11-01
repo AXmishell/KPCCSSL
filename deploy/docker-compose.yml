@@ -1,0 +1,33 @@
+services:
+  kpccssl:
+    image: ghcr.io/axmishell/kpccssl:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # panel
+      # - "80:8081"   # enable for HTTP-01 standalone
+      # - "443:8443"  # enable for TLS-ALPN-01
+    volumes:
+      - ./data:/data
+      # HTTP-01 webroot (optional)
+      # - /var/www/html:/var/www/html
+    environment:
+      KPCC_LISTEN: ":8080"
+      KPCC_DATA_DIR: "/data"
+      KPCC_LOG_LEVEL: "info"
+      KPCC_DEPLOY_ROOTS: "/data/deploy"
+      KPCC_WEBROOT_ROOTS: "/var/www:/data/webroot"
+      KPCC_HTTP_PORT: "8081"
+      KPCC_TLS_PORT: "8443"
+      # Behind a reverse proxy, list its CIDR so X-Forwarded-For is honoured:
+      # KPCC_TRUSTED_PROXIES: "172.16.0.0/12"
+      # KPCC_BASE_URL: "https://certs.example.com"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/system/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
