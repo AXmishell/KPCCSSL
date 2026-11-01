@@ -36,6 +36,11 @@ FROM alpine:3.21
 ARG ACME_VERSION=3.1.6
 ARG APK_MIRROR=
 
+LABEL org.opencontainers.image.title="KPCCSSL" \
+      org.opencontainers.image.description="Self-hosted ACME certificate manager" \
+      org.opencontainers.image.licenses="GPL-3.0-only" \
+      org.opencontainers.image.source="https://github.com/axmishell/kpccssl"
+
 RUN if [ -n "$APK_MIRROR" ]; then sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories; fi && \
     apk add --no-cache bash curl openssl socat ca-certificates tzdata wget && \
     addgroup -g 10001 kpccssl && \
@@ -49,7 +54,7 @@ COPY --from=build /out/acme-LICENSE.md /licenses/acme.sh-LICENSE.md
 COPY LICENSE /licenses/KPCCSSL-LICENSE
 
 RUN chmod 0755 /usr/local/bin/kpccssl /opt/acme.sh/acme.sh && \
-    printf 'acme.sh %s (GPLv3) is bundled under /opt/acme.sh; see /licenses.\n' "${ACME_VERSION}" > /licenses/README.txt
+    printf 'KPCCSSL is GPLv3 (see /licenses/KPCCSSL-LICENSE).\nacme.sh %s (GPLv3) is bundled under /opt/acme.sh; see /licenses.\n' "${ACME_VERSION}" > /licenses/README.txt
 
 ENV KPCC_DATA_DIR=/data \
     KPCC_ACME_BIN=/opt/acme.sh/acme.sh \

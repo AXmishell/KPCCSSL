@@ -62,7 +62,7 @@
 
 ## 2. 现状核对（基于当前仓库与 acme.sh）
 
-当前仓库 `AXmishell/KPCCSSL` 只有 `LICENSE`（MIT）和一个 Initial commit，**没有既有代码约束**，可以从零设计。
+当前仓库 `AXmishell/KPCCSSL` 只有 `LICENSE` 和一个 Initial commit，**没有既有代码约束**，可以从零设计。
 
 核对 acme.sh 当前版本后的关键事实：
 
@@ -80,7 +80,7 @@
 | acme.sh 本身没有看到全局进程锁 | 必须由 Go 侧串行化，至少同一 `config-home` 同时只跑一个 acme.sh |
 | 支持 `--cert-profile`、`--valid-to`、`--preferred-chain`、`--challenge-alias`、`--dnssleep`、`--always-force-new-domain-key`、`--ocsp` | 高级选项可以逐步暴露，不必首版全做 |
 | 支持 `--revoke --revoke-reason 0-10` | 吊销功能可直接实现 |
-| 许可证是 **GPLv3**，本项目是 MIT | 分发包含 acme.sh 的镜像时需要遵守 GPLv3（提供源码/声明）；调用独立进程通常不改变本项目许可证，但建议法务确认 |
+| 许可证是 **GPLv3**，本项目现同样采用 GPLv3 | 分发包含 acme.sh 的镜像时统一遵守 GPLv3（提供源码/声明） |
 
 > 说明：以上行为基于当前 acme.sh master 代码核对。实现时应固定一个 tag，并针对该版本做契约测试，避免上游变更导致解析失效。
 

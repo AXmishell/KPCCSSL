@@ -142,8 +142,8 @@ API 契约见 [docs/openapi.yaml](docs/openapi.yaml)，运行/备份/升级见 [
 ## acme.sh 与许可证
 
 - 默认镜像固定 acme.sh `3.1.6`（构建参数 `ACME_VERSION`），禁用自动升级。
-- KPCCSSL 使用 MIT；acme.sh 为 GPLv3，镜像内附 `/licenses/acme.sh-LICENSE.md`，分发时需同时提供其源码获取方式。
+- KPCCSSL 与 acme.sh 均使用 GPLv3；镜像内附 `/licenses/KPCCSSL-LICENSE`、`/licenses/acme.sh-LICENSE.md` 与源码获取方式。分发时需遵守 GPLv3（包含对应源码）。
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
+GNU General Public License v3.0，见 [LICENSE](LICENSE)。

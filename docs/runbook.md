@@ -119,4 +119,4 @@ curl -s http://127.0.0.1:8080/api/v1/system/health
 
 ## 9. 许可证
 
-KPCCSSL 为 MIT。镜像内的 acme.sh 为 GPLv3；分发镜像时需提供 `/licenses/acme.sh-LICENSE.md` 及对应源码获取方式（见构建参数 `ACME_VERSION` 的 GitHub tag）。
+KPCCSSL 与 acme.sh 均为 GPLv3。分发镜像时需提供 `/licenses/KPCCSSL-LICENSE`、`/licenses/acme.sh-LICENSE.md` 及对应源码获取方式（见构建参数 `ACME_VERSION` 的 GitHub tag）。
