@@ -32,7 +32,7 @@ RUN mkdir -p /out/acme && \
     cp /out/acme/LICENSE.md /out/acme-LICENSE.md
 
 # ---- runtime --------------------------------------------------------------
-FROM alpine:3.21
+FROM alpine:3.24
 ARG ACME_VERSION=3.1.6
 ARG APK_MIRROR=
 
