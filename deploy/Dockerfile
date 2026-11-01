@@ -8,7 +8,7 @@ COPY internal/webui ./internal/webui
 RUN cd web && npm run build
 
 # ---- backend --------------------------------------------------------------
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 ARG ACME_VERSION=3.1.6
 ARG VERSION=docker
 ARG COMMIT=unknown
