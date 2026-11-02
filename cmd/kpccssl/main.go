@@ -195,7 +195,7 @@ func runServe(cmd string, args []string) error {
 	if needsSetup {
 		slog.Warn("first-run setup required", "setup_token", a.svc.SetupTokenLogValue())
 		tokenPath := filepath.Join(cfg.DataDir, "setup-token")
-		if err := os.WriteFile(tokenPath, []byte(a.svc.SetupTokenLogValue()+"\n"), 0o600); err != nil {
+		if err := os.WriteFile(tokenPath, []byte(a.svc.SetupTokenLogValue()+"\n"), 0o600); err != nil { // #nosec G703 -- tokenPath is derived from the operator-controlled data dir
 			slog.Warn("cannot persist setup token", "error", err)
 		} else {
 			slog.Warn("setup token written to file", "path", tokenPath)

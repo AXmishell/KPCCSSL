@@ -116,7 +116,7 @@ func LoadFile(path string) (*Config, error) {
 func load(path string, mustExist bool) (*Config, error) {
 	var f fileConfig
 	if path != "" {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G703 -- path is the operator-supplied config file
 		if err != nil {
 			if mustExist {
 				return nil, fmt.Errorf("read config %s: %w", path, err)
