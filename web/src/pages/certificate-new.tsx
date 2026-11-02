@@ -50,6 +50,7 @@ const schema = z
   });
 
 type FormValues = z.infer<typeof schema>;
+type FormInput = z.input<typeof schema>;
 
 const challenges: ChallengeType[] = ["dns-01", "http-01-webroot", "http-01-standalone", "tls-alpn-01"];
 const stepFields: (keyof FormValues)[][] = [
@@ -76,7 +77,7 @@ export function CertificateNewPage() {
     setValue,
     trigger,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
+  } = useForm<FormInput, unknown, FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       name: "",
