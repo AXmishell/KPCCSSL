@@ -17,6 +17,12 @@ updates:
       web-dependencies:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # openapi-typescript (used by `npm run openapi`) only supports
+      # peer typescript ^5.x, so a TS 7 bump cannot be installed.
+      # Remove this entry once openapi-typescript supports TS 7.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
 
   - package-ecosystem: github-actions
     directory: /
