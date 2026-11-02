@@ -113,15 +113,15 @@ export function JobDetailPage() {
           <CardContent>
             <div
               ref={terminalRef}
-              className="h-[55vh] overflow-y-auto rounded-md border border-border bg-[#0b0f14] p-3 font-mono text-xs leading-relaxed text-slate-200 scrollbar-thin"
+              className="h-[55vh] overflow-y-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed text-foreground scrollbar-thin"
             >
               {lines.length === 0 ? (
-                <p className="text-slate-500">{t("job.noLogs")}</p>
+                <p className="text-muted-foreground">{t("job.noLogs")}</p>
               ) : (
                 lines.map((line) => (
                   <div key={line.seq} className="whitespace-pre-wrap break-all">
-                    <span className="mr-2 select-none text-slate-600">{String(line.seq).padStart(3, "0")}</span>
-                    <span className={line.line.includes("failed") ? "text-red-400" : line.line.includes("succeeded") ? "text-emerald-400" : undefined}>
+                    <span className="mr-2 select-none text-muted-foreground/70">{String(line.seq).padStart(3, "0")}</span>
+                    <span className={line.line.includes("failed") ? "text-red-600 dark:text-red-400" : line.line.includes("succeeded") ? "text-emerald-600 dark:text-emerald-400" : undefined}>
                       {line.line}
                     </span>
                   </div>

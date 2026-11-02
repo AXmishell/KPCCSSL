@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,15 +35,6 @@ const navItems = [
   { to: "/audit", key: "audit", icon: ShieldCheck, admin: true },
   { to: "/settings", key: "settings", icon: Settings, admin: true },
 ];
-
-function useTheme() {
-  const [theme, setTheme] = React.useState(() => localStorage.getItem("kpcc_theme") || "dark");
-  React.useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    localStorage.setItem("kpcc_theme", theme);
-  }, [theme]);
-  return { theme, setTheme };
-}
 
 export function AppLayout() {
   const { t, i18n } = useTranslation();

@@ -10,10 +10,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input, Select } from "@/components/ui/input";
 import { PageHeader, Spinner, Table, Td, Th } from "@/components/ui/misc";
 import { formatBytes } from "@/lib/format";
+import { readTheme, useTheme, type Theme } from "@/lib/theme";
 
 export function SettingsPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const { setTheme } = useTheme();
   const { data: settings } = useSettings();
   const { data: info } = useInfo();
   const { data: users } = useUsers();
@@ -28,7 +30,7 @@ export function SettingsPage() {
       default_ca_id: String(settings.default_ca_id ?? ""),
       renewal_notice_days: String(settings.renewal_notice_days ?? 30),
       retention_days: String(settings.retention_days ?? 30),
-      theme: String(settings.theme ?? "dark"),
+      theme: readTheme(),
     });
   }, [settings]);
 
@@ -45,6 +47,7 @@ export function SettingsPage() {
           theme: form.theme,
         },
       });
+      setTheme(form.theme as Theme);
       toast.success(t("settings.saved"));
       void qc.invalidateQueries();
     } catch (err) {
@@ -103,9 +106,16 @@ export function SettingsPage() {
               />
             </Field>
             <Field label={t("settings.theme")}>
-              <Select value={form.theme} onChange={(e) => setForm((f) => ({ ...f, theme: e.target.value }))}>
-                <option value="dark">{t("common.dark")}</option>
+              <Select
+                value={form.theme}
+                onChange={(e) => {
+                  const next = e.target.value as Theme;
+                  setForm((f) => ({ ...f, theme: next }));
+                  setTheme(next);
+                }}
+              >
                 <option value="light">{t("common.light")}</option>
+                <option value="dark">{t("common.dark")}</option>
               </Select>
             </Field>
             <div className="flex items-end">

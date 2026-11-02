@@ -6,8 +6,17 @@ import { Toaster } from "sonner";
 import { AuthProvider } from "./auth";
 import { ErrorBoundary } from "./components/error-boundary";
 import { App } from "./App";
+import { applyTheme, readTheme, useTheme } from "./lib/theme";
 import "./i18n";
 import "./index.css";
+
+// Apply before the first paint so light mode never flashes dark.
+applyTheme(readTheme());
+
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return <Toaster theme={theme} richColors closeButton position="top-right" />;
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,7 +36,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <ErrorBoundary>
             <App />
           </ErrorBoundary>
-          <Toaster theme="system" richColors closeButton position="top-right" />
+          <ThemedToaster />
         </BrowserRouter>
       </AuthProvider>
     </QueryClientProvider>

@@ -1,12 +1,23 @@
 <!doctype html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>KPCCSSL</title>
-    <script type="module" crossorigin src="/assets/index-D6j0sJla.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DA4Q-V5s.css">
+    <script>
+      (() => {
+        try {
+          const theme = localStorage.getItem("kpcc_theme_v2") === "dark" ? "dark" : "light";
+          document.documentElement.classList.toggle("dark", theme === "dark");
+          document.documentElement.style.colorScheme = theme;
+        } catch {
+          document.documentElement.style.colorScheme = "light";
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-I5pOM15c.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BvnTEZO-.css">
   </head>
   <body>
     <div id="root"></div>

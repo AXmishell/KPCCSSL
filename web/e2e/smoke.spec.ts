@@ -10,11 +10,13 @@ test("setup, issue a certificate and download it", async ({ page }) => {
   await page.getByLabel("确认密码").fill(PASSWORD);
   await page.getByRole("button", { name: "完成初始化" }).click();
   await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
 
   // CA account.
   await page.goto("/ca-accounts");
   await page.getByRole("button", { name: "添加 CA" }).first().click();
-  await page.getByLabel("快速选择").selectOption("letsencrypt-staging");
+  await page.getByLabel("快速选择").click();
+  await page.getByRole("option", { name: "Let's Encrypt (staging)" }).click();
   await page.getByLabel("邮箱").last().fill("admin@example.com");
   await page.getByRole("switch", { name: "我已阅读并同意 CA 的服务条款" }).click();
   await page.getByRole("button", { name: "创建", exact: true }).click();
@@ -32,12 +34,14 @@ test("setup, issue a certificate and download it", async ({ page }) => {
 
   // Certificate wizard.
   await page.goto("/certificates/new");
-  await page.getByLabel("CA 账户").selectOption({ index: 1 });
+  await page.getByLabel("CA 账户").click();
+  await page.getByRole("listbox").getByRole("option").nth(1).click();
   await page.getByRole("button", { name: "下一步" }).click();
   await page.getByLabel("主域名").fill("example.com");
   await page.getByLabel("附加域名 (SAN)").fill("www.example.com");
   await page.getByRole("button", { name: "下一步" }).click();
-  await page.getByLabel("DNS 凭据").selectOption({ index: 1 });
+  await page.getByLabel("DNS 凭据").click();
+  await page.getByRole("listbox").getByRole("option").nth(1).click();
   await page.getByRole("button", { name: "下一步" }).click();
   await page.getByRole("button", { name: "下一步" }).click();
   await page.getByRole("button", { name: "创建" }).click();
