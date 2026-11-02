@@ -202,7 +202,6 @@ export default {
       add: "添加 CA",
       empty: "还没有 CA 账户。",
       directory: "Directory URL",
-      staging: "使用 staging 环境",
       eabKid: "EAB Key ID",
       eabHmac: "EAB HMAC Key",
       eabHint: "仅 ZeroSSL / Google / SSL.com 等需要 EAB 的 CA 填写。",

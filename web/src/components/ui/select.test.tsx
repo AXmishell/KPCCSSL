@@ -58,6 +58,44 @@ describe("Select", () => {
     expect(screen.getByTestId("value")).toHaveTextContent("rsa-4096");
   });
 
+  it("filters options when searchable", () => {
+    function Harness() {
+      const [value, setValue] = React.useState("apple");
+      return (
+        <>
+          <Select aria-label="fruit" value={value} onChange={(event) => setValue(event.target.value)} searchable searchPlaceholder="Search">
+            <option value="apple">Apple</option>
+            <option value="banana">Banana</option>
+          </Select>
+          <span data-testid="value">{value}</span>
+        </>
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("combobox", { name: "fruit" }));
+    fireEvent.change(screen.getByPlaceholderText("Search"), { target: { value: "ban" } });
+
+    expect(screen.queryByRole("option", { name: "Apple" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "Banana" }));
+
+    expect(screen.getByTestId("value")).toHaveTextContent("banana");
+  });
+
+  it("closes the popup on Escape", () => {
+    render(
+      <Select aria-label="fruit" defaultValue="apple" searchable searchPlaceholder="Search">
+        <option value="apple">Apple</option>
+        <option value="banana">Banana</option>
+      </Select>,
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "fruit" }));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByPlaceholderText("Search"), { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
   it("supports keyboard selection", () => {
     function Harness() {
       const [value, setValue] = React.useState("a");

@@ -17,7 +17,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/axmishell/kpccssl/internal/auth"
-	"github.com/axmishell/kpccssl/internal/dnsprovider"
 	"github.com/axmishell/kpccssl/internal/service"
 	"github.com/axmishell/kpccssl/internal/store"
 )
@@ -28,7 +27,7 @@ func (s *Server) listCA(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "presets": service.CAPresets()})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "presets": s.Svc.CAPresets()})
 }
 
 func (s *Server) createCA(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +72,7 @@ func (s *Server) registerCA(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listDNSProviders(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": dnsprovider.All()})
+	writeJSON(w, http.StatusOK, map[string]any{"items": s.Svc.DNS.All()})
 }
 
 type dnsView struct {

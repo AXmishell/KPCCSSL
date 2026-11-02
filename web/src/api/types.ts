@@ -13,7 +13,6 @@ export interface CAAccount {
   id: string;
   name: string;
   directory_url: string;
-  is_staging: boolean;
   email: string | null;
   eab_kid: string | null;
   status: "new" | "registered" | "error" | "disabled";
@@ -26,7 +25,6 @@ export interface CAPreset {
   id: string;
   name: string;
   directory_url: string;
-  staging: boolean;
   needs_eab: boolean;
 }
 
@@ -210,7 +208,6 @@ export interface Page<T> {
 export interface CAInput {
   name: string;
   directory_url: string;
-  is_staging: boolean;
   email: string;
   eab_kid: string;
   eab_hmac_key: string;

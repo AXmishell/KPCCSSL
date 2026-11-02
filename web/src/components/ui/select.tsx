@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Option = {
@@ -53,8 +53,14 @@ function collectOptions(children: React.ReactNode): Option[] {
  * Native select wrapped in a custom listbox so the trigger and the option list
  * can be themed. The real <select> stays in the DOM (visually hidden) so React
  * Hook Form, form submission and onChange handlers keep working unchanged.
+ * Pass `searchable` for long lists to show a filter input in the popup.
  */
-export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttributes<HTMLSelectElement>>(
+export type SelectProps = React.SelectHTMLAttributes<HTMLSelectElement> & {
+  searchable?: boolean;
+  searchPlaceholder?: string;
+};
+
+export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
   function Select(
     {
       className,
@@ -63,6 +69,8 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
       id,
       value,
       defaultValue,
+      searchable = false,
+      searchPlaceholder = "Search…",
       "aria-label": ariaLabel,
       "aria-labelledby": ariaLabelledby,
       "aria-describedby": ariaDescribedby,
@@ -74,6 +82,7 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
     const selectRef = React.useRef<HTMLSelectElement | null>(null);
     const triggerRef = React.useRef<HTMLButtonElement | null>(null);
     const listRef = React.useRef<HTMLDivElement | null>(null);
+    const searchRef = React.useRef<HTMLInputElement | null>(null);
     const typeahead = React.useRef({ text: "", at: 0 });
 
     const listId = React.useId();
@@ -81,9 +90,18 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
     const controlled = value !== undefined;
     const [uncontrolled, setUncontrolled] = React.useState<string>(() => String(defaultValue ?? ""));
     const [open, setOpen] = React.useState(false);
+    const [query, setQuery] = React.useState("");
     const [active, setActive] = React.useState(-1);
     const [placement, setPlacement] = React.useState<Placement | null>(null);
     const [container, setContainer] = React.useState<HTMLElement | null>(null);
+
+    const visible = React.useMemo(() => {
+      const needle = query.trim().toLowerCase();
+      if (!searchable || !needle) return options;
+      return options.filter(
+        (option) => option.label.toLowerCase().includes(needle) || option.value.toLowerCase().includes(needle),
+      );
+    }, [options, query, searchable]);
 
     const current = controlled ? String(value ?? "") : uncontrolled;
     const selectedIndex = options.findIndex((option) => option.value === current);
@@ -115,9 +133,15 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
       const top = dialog && bounds ? rect.top - bounds.top + dialog.scrollTop : rect.top;
       const spaceBelow = ((dialog && bounds ? bounds.bottom : window.innerHeight) - rect.bottom) - 8;
       const spaceAbove = (rect.top - (dialog && bounds ? bounds.top : 0)) - 8;
-      const wanted = options.length * 34 + 10;
+      // Keep the popup height aligned to option rows so a half-cut row is
+      // never visible at the bottom edge.
+      const rowHeight = 32;
+      const chrome = 8 + (searchable ? 40 : 0);
+      const wanted = options.length * rowHeight + chrome;
       const openUp = spaceBelow < Math.min(wanted, 200) && spaceAbove > spaceBelow;
-      const maxHeight = Math.max(96, Math.min(300, openUp ? spaceAbove : spaceBelow));
+      const available = Math.min(320, Math.max(96, openUp ? spaceAbove : spaceBelow));
+      const rows = Math.max(1, Math.floor((available - chrome) / rowHeight));
+      const maxHeight = chrome + rows * rowHeight;
       const height = Math.min(wanted, maxHeight);
 
       setContainer(dialog ?? document.body);
@@ -128,20 +152,26 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
         maxHeight,
         absolute: Boolean(dialog),
       });
-    }, [options.length]);
+    }, [options.length, searchable]);
 
     const openMenu = React.useCallback(() => {
       if (disabled) return;
       if (!controlled && selectRef.current) setUncontrolled(selectRef.current.value);
+      setQuery("");
       setActive(selectedIndex);
       setOpen(true);
     }, [controlled, disabled, selectedIndex]);
 
     const closeMenu = React.useCallback((refocus = false) => {
       setOpen(false);
+      setQuery("");
       setPlacement(null);
       if (refocus) triggerRef.current?.focus();
     }, []);
+
+    React.useEffect(() => {
+      if (open && searchable) searchRef.current?.focus();
+    }, [open, searchable]);
 
     const commit = React.useCallback(
       (next: string) => {
@@ -196,16 +226,17 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
           openMenu();
           return;
         }
-        if (event.key === "ArrowDown") setActive((index) => Math.min(options.length - 1, index + 1));
+        if (event.key === "ArrowDown") setActive((index) => Math.min(visible.length - 1, index + 1));
         else if (event.key === "ArrowUp") setActive((index) => Math.max(0, index - 1));
         else {
-          const option = options[active];
+          const option = visible[active];
           if (option && !option.disabled) commit(option.value);
         }
         return;
       }
       if (event.key === "Escape" && open) {
         event.preventDefault();
+        event.stopPropagation();
         closeMenu(true);
         return;
       }
@@ -216,7 +247,7 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
       }
       if (event.key === "End" && open) {
         event.preventDefault();
-        setActive(options.length - 1);
+        setActive(visible.length - 1);
         return;
       }
       if (event.key === "Tab" && open) closeMenu();
@@ -224,11 +255,31 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
         const now = Date.now();
         const text = now - typeahead.current.at < 500 ? typeahead.current.text + event.key : event.key;
         typeahead.current = { text, at: now };
-        const index = options.findIndex((option) => option.label.toLowerCase().startsWith(text.toLowerCase()));
+        const index = visible.findIndex((option) => option.label.toLowerCase().startsWith(text.toLowerCase()));
         if (index >= 0) {
           if (!open) openMenu();
           setActive(index);
         }
+      }
+    };
+
+    const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActive((index) => Math.min(visible.length - 1, index + 1));
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActive((index) => Math.max(0, index - 1));
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const option = visible[active];
+        if (option && !option.disabled) commit(option.value);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu(true);
+      } else if (event.key === "Tab") {
+        closeMenu();
       }
     };
 
@@ -284,9 +335,7 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
           createPortal(
             <div
               ref={listRef}
-              role="listbox"
-              id={listId}
-              aria-labelledby={id}
+              data-select-open="true"
               style={{
                 position: placement.absolute ? "absolute" : "fixed",
                 left: placement.left,
@@ -296,30 +345,55 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
               }}
               className="pointer-events-auto z-[100] overflow-y-auto overscroll-contain rounded-md border border-border bg-card p-1 text-card-foreground shadow-xl ring-1 ring-black/5 scrollbar-thin animate-fade-in"
             >
-              {options.map((option, index) => (
-                <div
-                  key={`${option.value}-${index}`}
-                  id={`${listId}-${index}`}
-                  role="option"
-                  aria-selected={option.value === current}
-                  aria-disabled={option.disabled || undefined}
-                  onMouseEnter={() => setActive(index)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    if (!option.disabled) commit(option.value);
-                  }}
-                  className={cn(
-                    "flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm",
-                    active === index && "bg-accent text-accent-foreground",
-                    option.value === current && "font-medium",
-                    option.disabled && "cursor-not-allowed opacity-50",
-                  )}
-                >
-                  <span className="flex-1 truncate">{option.label}</span>
-                  {option.value === current && <Check aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-primary" />}
+              {searchable && (
+                <div className="sticky top-0 z-10 -mx-1 -mt-1 mb-1 border-b border-border bg-card p-1">
+                  <div className="relative">
+                    <Search
+                      aria-hidden="true"
+                      className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                    />
+                    <input
+                      ref={searchRef}
+                      type="text"
+                      value={query}
+                      placeholder={searchPlaceholder}
+                      aria-label={searchPlaceholder}
+                      onChange={(event) => {
+                        setQuery(event.target.value);
+                        setActive(0);
+                      }}
+                      onKeyDown={onSearchKeyDown}
+                      className="h-8 w-full rounded-sm border border-input bg-background pl-7 pr-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
                 </div>
-              ))}
-              {options.length === 0 && <div className="px-2 py-1.5 text-sm text-muted-foreground">—</div>}
+              )}
+              <div role="listbox" id={listId} aria-labelledby={id}>
+                {visible.map((option, index) => (
+                  <div
+                    key={`${option.value}-${index}`}
+                    id={`${listId}-${index}`}
+                    role="option"
+                    aria-selected={option.value === current}
+                    aria-disabled={option.disabled || undefined}
+                    onMouseEnter={() => setActive(index)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      if (!option.disabled) commit(option.value);
+                    }}
+                    className={cn(
+                      "flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm",
+                      active === index && "bg-accent text-accent-foreground",
+                      option.value === current && "font-medium",
+                      option.disabled && "cursor-not-allowed opacity-50",
+                    )}
+                  >
+                    <span className="flex-1 truncate">{option.label}</span>
+                    {option.value === current && <Check aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                  </div>
+                ))}
+              </div>
+              {visible.length === 0 && <div className="px-2 py-1.5 text-sm text-muted-foreground">—</div>}
             </div>,
             container,
           )}

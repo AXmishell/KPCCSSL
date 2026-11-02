@@ -477,7 +477,6 @@ export interface components {
             id?: string;
             name?: string;
             directory_url?: string;
-            is_staging?: boolean;
             email?: string | null;
             eab_kid?: string | null;
             tos_accepted_at?: number | null;
@@ -488,7 +487,6 @@ export interface components {
         CAInput: {
             name: string;
             directory_url: string;
-            is_staging?: boolean;
             email?: string;
             eab_kid?: string;
             eab_hmac_key?: string;
@@ -1046,7 +1044,6 @@ export interface operations {
                             id?: string;
                             name?: string;
                             directory_url?: string;
-                            staging?: boolean;
                             needs_eab?: boolean;
                         }[];
                     };

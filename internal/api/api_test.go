@@ -165,7 +165,7 @@ func TestEndToEndIssueFlow(t *testing.T) {
 
 	data = h.mustDo(t, "POST", "/ca-accounts", map[string]any{
 		"name": "LE staging", "directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
-		"is_staging": true, "email": "admin@example.com", "tos_accepted": true,
+		"email": "admin@example.com", "tos_accepted": true,
 	}, h.csrf, http.StatusCreated)
 	var ca struct {
 		ID string `json:"id"`

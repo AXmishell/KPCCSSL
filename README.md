@@ -10,8 +10,8 @@
 
 ## 能力
 
-- ACME 账户：Let's Encrypt / ZeroSSL / Google / SSL.com / 自定义目录，staging 标记，EAB 加密存储。
-- DNS 凭据：Cloudflare、阿里云、DNSPod、Route 53、GoDaddy；字段白名单 + AES-256-GCM 加密。
+- ACME 账户：Let's Encrypt/ ZeroSSL / Google Trust Services / SSL.com（RSA/ECC）/ Actalis / 自定义目录；预设自动同步内置 acme.sh 的 CA 列表，EAB 加密存储。
+- DNS 凭据：自动同步 acme.sh dnsapi 的全部 provider（Cloudflare、阿里云、DNSPod、Route 53、GoDaddy 等 190+），字段白名单 + AES-256-GCM 加密。
 - 证书：主域名 + SAN、泛域名、ec-256/ec-384/rsa-2048/3072/4096；DNS-01 / HTTP-01 webroot / standalone / TLS-ALPN-01。
 - 异步任务：持久化队列、幂等键、重试退避、超时、进程组终止、SSE 实时日志（Last-Event-ID）。
 - 生命周期：启动对账、每日错峰续期、失败保留旧证书、吊销、事件时间线。

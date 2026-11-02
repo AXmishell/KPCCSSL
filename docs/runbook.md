@@ -13,7 +13,7 @@ docker compose logs -f kpccssl
 
 1. 从日志或 `data/setup-token` 读取一次性 setup token。
 2. 浏览器打开 `http://<host>:8080`，创建管理员。
-3. 在「CA 账户」添加 Let's Encrypt（或 staging）并点击「注册账户」。
+3. 在「CA 账户」添加 Let's Encrypt 并点击「注册账户」。测试时可手动填写 staging 目录 URL。
 4. 在「DNS 凭据」添加 provider token（建议最小权限）。
 5. 新建证书 → 选择 CA/域名/DNS 凭据 → 签发。
 6. 需要 HTTP-01 standalone / TLS-ALPN 时，取消 compose 中的 80/443 端口注释并放行防火墙。

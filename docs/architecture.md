@@ -33,7 +33,7 @@
 
 一个自托管的 Web 工具，用于：
 
-- 管理 ACME 账户（Let's Encrypt、ZeroSSL、Google Public CA、SSL.com，以及任意 RFC 8555 自定义 CA）；
+- 管理 ACME 账户（Let's Encrypt、ZeroSSL、Google Public CA、SSL.com、Actalis，以及任意 RFC 8555 自定义 CA；预设从内置 acme.sh 的 CA 列表自动同步）；
 - 为域名签发、续期、吊销证书；
 - 支持 DNS-01（API 自动加 TXT）、HTTP-01（webroot/standalone）、TLS-ALPN-01；
 - 展示证书状态、到期时间、签发历史、任务日志；
@@ -69,7 +69,7 @@
 | 事实 | 对设计的影响 |
 |---|---|
 | 纯 Shell 实现，依赖 `curl`/`wget`、`openssl`、可选 `socat`/`nc` | 运行镜像不能是 distroless，需要 shell 和这些工具 |
-| `dnsapi/` 下约 200 个脚本（当前 202 个 `.sh`，含少量公共辅助脚本），覆盖大量 DNS 服务商 | 这是选 acme.sh 的核心理由；但各脚本的变量名/行为不统一，需要维护元数据目录 |
+| `dnsapi/` 下约 200 个脚本（当前 202 个 `.sh`，含少量公共辅助脚本），覆盖大量 DNS 服务商 | 这是选 acme.sh 的核心理由；provider 和字段从 `dns_<id>_info` 块自动发现，常用 provider 用人工校准的元数据覆盖 |
 | 默认 CA 是 **ZeroSSL**，不是 Let's Encrypt | 必须显式传 `--server`，不能依赖默认值；UI 要让用户明确选择 |
 | 默认密钥类型 `ec-256`，默认续期天数 30 天 | 符合现代默认；但续期不能写死 30 天，要跟随 ARI 和实际 NotAfter |
 | 支持 ARI（RFC 9773），`--renew` 会参考 CA 的 `suggestedWindow` | 续期调度应“每天触发、由 acme.sh 判断是否真的续”，而不是自己算死日期 |
@@ -92,8 +92,8 @@
 
 - 首次启动初始化管理员（一次性 setup token）。
 - 登录/登出、会话、修改密码、基础审计。
-- CA 账户管理：Let's Encrypt（含 staging）、ZeroSSL、自定义 ACME URL；Google/SSL.com 所需的 EAB 字段。
-- DNS 凭据管理：至少 Cloudflare、阿里云、腾讯云 DNSPod、AWS Route53（按目标用户再增减）。
+- CA 账户管理：Let's Encrypt、ZeroSSL、自定义 ACME URL；Google/SSL.com 所需的 EAB 字段。
+- DNS 凭据管理：从 acme.sh `dnsapi/` 自动同步 provider（含 Cloudflare、阿里云、腾讯云 DNSPod、AWS Route53 等），常用 provider 提供人工校准的字段标签与权限说明。
 - 证书项目：主域名 + SAN、泛域名、密钥类型（ec-256/ec-384/rsa2048/rsa4096）、CA、验证方式。
 - DNS-01 自动签发（含异步任务、实时日志、失败原因）。
 - 证书列表/详情、到期时间、下载 PEM/ZIP。
@@ -388,7 +388,7 @@ erDiagram
 |---|---|---|
 | `users` | id, email, password_hash, totp_secret_enc, role, disabled, created_at | 单管理员也走这张表 |
 | `sessions` | id, user_id, token_hash, csrf_secret, expires_at, ip, ua, last_seen_at | 只存 token 哈希 |
-| `ca_accounts` | id, name, directory_url, is_staging, email, eab_kid, eab_hmac_enc, status, created_at | EAB 加密 |
+| `ca_accounts` | id, name, directory_url, email, eab_kid, eab_hmac_enc, status, created_at | EAB 加密 |
 | `dns_credentials` | id, name, provider, config_enc, key_version, status, last_used_at | `config_enc` 是 AES-GCM 密文 |
 | `certificates` | id, name, primary_domain, san_json, key_type, ca_account_id, challenge_type, dns_credential_id, webroot, options_json, auto_renew, status, current_revision_id, next_renew_at, version | 期望配置 + 当前状态 |
 | `certificate_revisions` | id, certificate_id, serial, fingerprint_sha256, not_before, not_after, cert_path, key_path, chain_path, fullchain_path, issued_at, revoked_at | 每次签发一份，保留历史 |
@@ -507,7 +507,7 @@ acme.sh 的插件没有统一元数据，需要自建一个静态目录（嵌入
 实现建议：
 
 - 先手工维护目标用户最常用的 5～8 家，不要一开始追求 200 家全支持。
-- 用 CI 脚本对比 acme.sh `dnsapi/` 新增文件，提示“有新 provider 待评估”，而不是自动全量开放。
+- 启动时从 `dnsapi/` 自动发现 provider；字段仍通过 info 块生成的白名单校验，未知环境变量不能注入 acme.sh。
 - 每个 provider 的字段映射到环境变量；前端根据 `secret` 决定密码框。
 - 提供“测试凭据”功能：用 staging CA 对一个用户指定的测试域名做一次 DNS-01（可选，会产生真实 DNS 记录）；或者只做字段格式校验，首次签发时再暴露真实错误。两者要明确标注。
 - 记录每个 provider 的限制：是否需要 zone ID、是否支持泛域名、是否有 propagation 延迟、是否需要 CNAME 委派。
@@ -518,7 +518,7 @@ acme.sh 的插件没有统一元数据，需要自建一个静态目录（嵌入
 - 阈值配置化，不写死 CA 的具体数字；默认保守。
 - 重试使用指数退避：例如 1 分钟、10 分钟、1 小时、6 小时；超过次数转人工。
 - 同一证书的 issue 请求用数据库唯一约束 + 证书锁去重；API 支持 `Idempotency-Key`，避免前端重试造成重复订单。
-- staging 环境单独标记，禁止把 staging 证书当作生产证书部署。
+- staging 目录仅用于测试；部署时根据 directory_url 自动识别 staging/test 目录并给出警告，避免把测试证书用于生产。
 
 ---
 
@@ -710,7 +710,7 @@ REST + JSON，异步操作返回 `202 Accepted` + `job_id`。
 | 证书详情 | 状态、SAN、Issuer、有效期、指纹、当前 revision、历史时间线、下载、续期/吊销/部署 |
 | 任务详情 | 实时日志、错误码、耗时、重试、原始日志下载 |
 | DNS 凭据 | provider 选择、动态表单、掩码显示、测试 |
-| CA 账户 | 注册状态、staging 标记、EAB 字段 |
+| CA 账户 | 注册状态、EAB 字段、目录 URL |
 | 部署目标 | 类型选择、路径/命令模板、测试、历史 |
 | 通知 | 渠道、事件订阅、测试发送 |
 | 审计 | 时间、用户、动作、资源、IP、结果 |

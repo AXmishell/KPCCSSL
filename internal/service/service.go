@@ -14,12 +14,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/axmishell/kpccssl/internal/acme"
 	"github.com/axmishell/kpccssl/internal/auth"
 	"github.com/axmishell/kpccssl/internal/config"
 	"github.com/axmishell/kpccssl/internal/deploy"
+	"github.com/axmishell/kpccssl/internal/dnsprovider"
 	"github.com/axmishell/kpccssl/internal/id"
 	"github.com/axmishell/kpccssl/internal/job"
 	"github.com/axmishell/kpccssl/internal/notify"
@@ -42,8 +44,12 @@ type Service struct {
 	Deployer *deploy.Deployer
 	Notifier *notify.Notifier
 	Limiter  *auth.Limiter
+	DNS      *dnsprovider.Catalog
 
 	SetupToken string
+
+	caPresetsOnce sync.Once
+	caPresets     []CAPreset
 }
 
 // New wires the service and registers job handlers.
@@ -51,7 +57,7 @@ func New(cfg *config.Config, st *store.Store, box *secret.Box, engine acme.Engin
 	s := &Service{
 		Cfg: cfg, Store: st, Box: box, Engine: engine, Logs: logs,
 		Runner: runner, Deployer: dep, Notifier: notifier,
-		Limiter: auth.NewLimiter(),
+		Limiter: auth.NewLimiter(), DNS: dnsprovider.Load(cfg.ACMEBin),
 	}
 	token := cfg.SetupToken
 	if token == "" {

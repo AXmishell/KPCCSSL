@@ -196,7 +196,6 @@ export default {
       add: "Add CA",
       empty: "No CA accounts yet.",
       directory: "Directory URL",
-      staging: "Use staging",
       eabKid: "EAB Key ID",
       eabHmac: "EAB HMAC Key",
       eabHint: "Only for CAs that require EAB (ZeroSSL, Google, SSL.com).",

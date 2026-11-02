@@ -271,7 +271,6 @@ paths:
                         id: { type: string }
                         name: { type: string }
                         directory_url: { type: string }
-                        staging: { type: boolean }
                         needs_eab: { type: boolean }
     post:
       operationId: createCAAccount
@@ -577,7 +576,6 @@ components:
         id: { type: string }
         name: { type: string }
         directory_url: { type: string }
-        is_staging: { type: boolean }
         email: { type: [string, "null"] }
         eab_kid: { type: [string, "null"] }
         tos_accepted_at: { type: [integer, "null"] }
@@ -589,7 +587,6 @@ components:
       properties:
         name: { type: string }
         directory_url: { type: string }
-        is_staging: { type: boolean }
         email: { type: string }
         eab_kid: { type: string }
         eab_hmac_key: { type: string }

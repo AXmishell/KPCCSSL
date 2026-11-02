@@ -6,13 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/axmishell/kpccssl/internal/acme"
 	"github.com/axmishell/kpccssl/internal/acme/acmesh"
-	"github.com/axmishell/kpccssl/internal/dnsprovider"
 	"github.com/axmishell/kpccssl/internal/id"
 	"github.com/axmishell/kpccssl/internal/job"
 	"github.com/axmishell/kpccssl/internal/store"
@@ -22,7 +24,6 @@ import (
 type CAInput struct {
 	Name         string `json:"name"`
 	DirectoryURL string `json:"directory_url"`
-	IsStaging    bool   `json:"is_staging"`
 	Email        string `json:"email"`
 	EABKid       string `json:"eab_kid"`
 	EABHMAC      string `json:"eab_hmac_key"`
@@ -34,19 +35,72 @@ type CAPreset struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	DirectoryURL string `json:"directory_url"`
-	Staging      bool   `json:"staging"`
 	NeedsEAB     bool   `json:"needs_eab"`
 }
 
-// CAPresets lists well-known ACME directories.
-func CAPresets() []CAPreset {
+// caPresetOrder keeps the UI stable even when acme.sh reorders its list.
+var caPresetOrder = map[string]int{
+	"letsencrypt": 0,
+	"zerossl":     1,
+	"sslcom":      2,
+	"sslcom-ecc":  3,
+	"google":      4,
+	"actalis":     5,
+}
+
+// CAPresets lists ACME directories. The bundled acme.sh script is the source
+// of truth; the built-in list keeps the UI usable when acme.sh is absent
+// (for example with the fake engine during development).
+func (s *Service) CAPresets() []CAPreset {
+	s.caPresetsOnce.Do(func() {
+		s.caPresets = fallbackCAPresets()
+		discovered, err := acmesh.DiscoverCAPresets(s.Cfg.ACMEBin)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				slog.Warn("cannot read CA presets from acme.sh; using built-in list", "path", s.Cfg.ACMEBin, "error", err)
+			}
+			return
+		}
+		if len(discovered) == 0 {
+			return
+		}
+		s.caPresets = make([]CAPreset, 0, len(discovered))
+		for _, preset := range discovered {
+			s.caPresets = append(s.caPresets, CAPreset{
+				ID: preset.ID, Name: preset.Name, DirectoryURL: preset.DirectoryURL,
+				NeedsEAB: preset.NeedsEAB,
+			})
+		}
+		sortCAPresets(s.caPresets)
+	})
+	return s.caPresets
+}
+
+func fallbackCAPresets() []CAPreset {
 	return []CAPreset{
 		{ID: "letsencrypt", Name: "Let's Encrypt", DirectoryURL: "https://acme-v02.api.letsencrypt.org/directory"},
-		{ID: "letsencrypt-staging", Name: "Let's Encrypt (staging)", DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory", Staging: true},
 		{ID: "zerossl", Name: "ZeroSSL", DirectoryURL: "https://acme.zerossl.com/v2/DV90", NeedsEAB: true},
+		{ID: "sslcom", Name: "SSL.com (RSA)", DirectoryURL: "https://acme.ssl.com/sslcom-dv-rsa", NeedsEAB: true},
+		{ID: "sslcom-ecc", Name: "SSL.com (ECC)", DirectoryURL: "https://acme.ssl.com/sslcom-dv-ecc", NeedsEAB: true},
 		{ID: "google", Name: "Google Trust Services", DirectoryURL: "https://dv.acme-v02.api.pki.goog/directory", NeedsEAB: true},
-		{ID: "sslcom", Name: "SSL.com", DirectoryURL: "https://acme.ssl.com/sslcom-dv-rsa", NeedsEAB: true},
+		{ID: "actalis", Name: "Actalis", DirectoryURL: "https://acme-api.actalis.com/acme/directory", NeedsEAB: true},
 	}
+}
+
+func sortCAPresets(presets []CAPreset) {
+	rank := func(id string) int {
+		if r, ok := caPresetOrder[id]; ok {
+			return r
+		}
+		return len(caPresetOrder)
+	}
+	sort.SliceStable(presets, func(i, j int) bool {
+		ri, rj := rank(presets[i].ID), rank(presets[j].ID)
+		if ri != rj {
+			return ri < rj
+		}
+		return presets[i].Name < presets[j].Name
+	})
 }
 
 // CreateCA validates and stores a CA account. EAB material is encrypted.
@@ -72,7 +126,7 @@ func (s *Service) CreateCA(ctx context.Context, in CAInput) (*store.CAAccount, e
 	now := store.Now()
 	a := &store.CAAccount{
 		ID: id.New(), Name: in.Name, DirectoryURL: strings.TrimSpace(in.DirectoryURL),
-		IsStaging: in.IsStaging, Status: "new", KeyVersion: s.Box.Version(),
+		Status: "new", KeyVersion: s.Box.Version(),
 		TOSAcceptedAt: &now, CreatedAt: now, UpdatedAt: now,
 	}
 	if in.Email != "" {
@@ -107,7 +161,6 @@ func (s *Service) UpdateCA(ctx context.Context, id string, in CAInput) (*store.C
 		}
 		a.DirectoryURL = strings.TrimSpace(in.DirectoryURL)
 	}
-	a.IsStaging = in.IsStaging
 	if in.TOSAccepted && a.TOSAcceptedAt == nil {
 		now := store.Now()
 		a.TOSAcceptedAt = &now
@@ -203,7 +256,7 @@ func (s *Service) CreateDNS(ctx context.Context, in DNSInput) (*store.DNSCredent
 	if in.Name == "" {
 		return nil, errors.New("name is required")
 	}
-	if err := dnsprovider.ValidateConfig(in.Provider, in.Config); err != nil {
+	if err := s.DNS.ValidateConfig(in.Provider, in.Config); err != nil {
 		return nil, err
 	}
 	raw, _ := json.Marshal(in.Config)
@@ -236,7 +289,7 @@ func (s *Service) UpdateDNS(ctx context.Context, id string, in DNSInput) (*store
 		d.Provider = in.Provider
 	}
 	if in.Config != nil {
-		if err := dnsprovider.ValidateConfig(d.Provider, in.Config); err != nil {
+		if err := s.DNS.ValidateConfig(d.Provider, in.Config); err != nil {
 			return nil, err
 		}
 		raw, _ := json.Marshal(in.Config)

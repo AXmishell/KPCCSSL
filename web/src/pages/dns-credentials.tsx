@@ -182,12 +182,16 @@ function DNSCredentialDialog({
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>{editing ? t("common.edit") : t("dns.add")}</DialogTitle>
-          {selected && (
+          {selected && (selected.docs || selected.min_role) && (
             <DialogDescription>
-              <a href={selected.docs} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
-                {t("dns.providerDocs")} <ExternalLink className="h-3 w-3" />
-              </a>
-              <span className="mt-1 block">{t("dns.minRole")}: {selected.min_role}</span>
+              {selected.docs && (
+                <a href={selected.docs} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                  {t("dns.providerDocs")} <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+              {selected.min_role && (
+                <span className="mt-1 block">{t("dns.minRole")}: {selected.min_role}</span>
+              )}
             </DialogDescription>
           )}
         </DialogHeader>
@@ -204,6 +208,8 @@ function DNSCredentialDialog({
                 setConfig({});
               }}
               disabled={Boolean(editing)}
+              searchable
+              searchPlaceholder={t("common.searchPlaceholder")}
             >
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>

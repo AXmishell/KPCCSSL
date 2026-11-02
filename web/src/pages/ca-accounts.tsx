@@ -59,7 +59,6 @@ export function CAAccountsPage() {
               <tr key={ca.id}>
                 <Td>
                   <div className="font-medium">{ca.name}</div>
-                  {ca.is_staging && <Badge variant="warning" className="mt-1">staging</Badge>}
                 </Td>
                 <Td className="max-w-[22rem] break-all font-mono text-[11px] text-muted-foreground">{ca.directory_url}</Td>
                 <Td>
@@ -96,7 +95,6 @@ function CreateCADialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const qc = useQueryClient();
   const [name, setName] = React.useState("");
   const [directory, setDirectory] = React.useState("");
-  const [staging, setStaging] = React.useState(false);
   const [email, setEmail] = React.useState("");
   const [eabKid, setEabKid] = React.useState("");
   const [eabHmac, setEabHmac] = React.useState("");
@@ -108,7 +106,6 @@ function CreateCADialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
     const preset = data?.presets.find((p) => p.id === id);
     if (!preset) return;
     setDirectory(preset.directory_url);
-    setStaging(preset.staging);
     if (!name) setName(preset.name);
   };
 
@@ -118,7 +115,7 @@ function CreateCADialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
     try {
       await request<CAAccount>("/ca-accounts", {
         method: "POST",
-        body: { name, directory_url: directory, is_staging: staging, email, eab_kid: eabKid, eab_hmac_key: eabHmac, tos_accepted: tos },
+        body: { name, directory_url: directory, email, eab_kid: eabKid, eab_hmac_key: eabHmac, tos_accepted: tos },
       });
       toast.success(t("ca.created"));
       await qc.invalidateQueries({ queryKey: qk.ca });
@@ -161,10 +158,6 @@ function CreateCADialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
           <Field label={t("auth.email")} hint={t("ca.emailHint")}>
             <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
-          <label className="flex items-center justify-between rounded-md border border-border p-3">
-            <span className="text-sm">{t("ca.staging")}</span>
-            <Switch checked={staging} onCheckedChange={setStaging} aria-label={t("ca.staging")} />
-          </label>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={t("ca.eabKid")}>
               <Input value={eabKid} onChange={(e) => setEabKid(e.target.value)} autoComplete="off" />

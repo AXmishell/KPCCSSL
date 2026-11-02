@@ -30,7 +30,6 @@ type CAAccount struct {
 	ID            string  `json:"id"`
 	Name          string  `json:"name"`
 	DirectoryURL  string  `json:"directory_url"`
-	IsStaging     bool    `json:"is_staging"`
 	Email         *string `json:"email"`
 	EABKID        *string `json:"eab_kid"`
 	EABHMACEnc    *string `json:"-"`
