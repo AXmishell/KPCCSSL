@@ -17,10 +17,17 @@ test("setup, issue a certificate and download it", async ({ page }) => {
   await page.getByRole("button", { name: "添加 CA" }).first().click();
   await page.getByLabel("快速选择").click();
   await page.getByRole("option", { name: "Let's Encrypt", exact: true }).click();
-  await page.getByLabel("邮箱").last().fill("admin@example.com");
+  await expect(page.getByLabel("邮箱").last()).toHaveValue("admin@example.com");
+  await page.getByLabel("邮箱").last().fill("ca-ops@example.com");
   await page.getByRole("switch", { name: "我已阅读并同意 CA 的服务条款" }).click();
   await page.getByRole("button", { name: "创建", exact: true }).click();
   await expect(page.getByRole("button", { name: "注册账户" })).toBeVisible();
+
+  // The last CA email is remembered for the next account.
+  await page.getByRole("button", { name: "添加 CA" }).first().click();
+  await expect(page.getByLabel("邮箱").last()).toHaveValue("ca-ops@example.com");
+  await page.getByRole("button", { name: "取消" }).click();
+
   await page.getByRole("button", { name: "注册账户" }).click();
   await expect(page.locator("tbody")).toContainText("已注册", { timeout: 10_000 });
 

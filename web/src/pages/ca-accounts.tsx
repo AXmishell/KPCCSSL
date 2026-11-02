@@ -84,21 +84,55 @@ export function CAAccountsPage() {
           </tbody>
         </Table>
       )}
-      <CreateCADialog open={open} onOpenChange={setOpen} />
+      <CreateCADialog open={open} onOpenChange={setOpen} defaultEmail={user?.email ?? ""} />
     </div>
   );
 }
 
-function CreateCADialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+function caEmailStorageKey(accountEmail: string) {
+  return `kpcc_ca_email:${accountEmail.toLowerCase()}`;
+}
+
+function readLastCAEmail(accountEmail: string): string {
+  try {
+    return window.localStorage.getItem(caEmailStorageKey(accountEmail)) || accountEmail;
+  } catch {
+    return accountEmail;
+  }
+}
+
+function rememberCAEmail(accountEmail: string, email: string) {
+  const value = email.trim();
+  if (!value) return;
+  try {
+    window.localStorage.setItem(caEmailStorageKey(accountEmail), value);
+  } catch {
+    // Storage disabled: keep the current value for this session only.
+  }
+}
+
+function CreateCADialog({
+  open,
+  onOpenChange,
+  defaultEmail,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  defaultEmail: string;
+}) {
   const { t } = useTranslation();
   const { data } = useCA();
   const qc = useQueryClient();
   const [name, setName] = React.useState("");
   const [directory, setDirectory] = React.useState("");
-  const [email, setEmail] = React.useState("");
+  const [email, setEmail] = React.useState(() => readLastCAEmail(defaultEmail));
   const [eabKid, setEabKid] = React.useState("");
   const [eabHmac, setEabHmac] = React.useState("");
   const [tos, setTos] = React.useState(false);
+
+  React.useEffect(() => {
+    if (open) setEmail(readLastCAEmail(defaultEmail));
+  }, [open, defaultEmail]);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
@@ -117,6 +151,7 @@ function CreateCADialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         method: "POST",
         body: { name, directory_url: directory, email, eab_kid: eabKid, eab_hmac_key: eabHmac, tos_accepted: tos },
       });
+      rememberCAEmail(defaultEmail, email);
       toast.success(t("ca.created"));
       await qc.invalidateQueries({ queryKey: qk.ca });
       onOpenChange(false);
@@ -124,6 +159,7 @@ function CreateCADialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
       setDirectory("");
       setEabKid("");
       setEabHmac("");
+      setEmail(readLastCAEmail(defaultEmail));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
