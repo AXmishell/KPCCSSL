@@ -134,6 +134,10 @@ curl -s http://127.0.0.1:8080/api/v1/system/health
 - Webhook 仅 HTTPS，拒绝私网/回环地址。
 - 备份介质需加密；主密钥离线保存。
 
+完整安全模型与部署检查清单见[安全说明](security.md)。
+
 ## 9. 许可证
 
 KPCCSSL 与 acme.sh 均为 GPLv3。分发镜像时需提供 `/licenses/KPCCSSL-LICENSE`、`/licenses/acme.sh-LICENSE.md` 及对应源码获取方式（见构建参数 `ACME_VERSION` 的 GitHub tag）。
+
+详见[许可证与 acme.sh](../reference/licensing.md)。

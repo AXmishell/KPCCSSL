@@ -876,8 +876,15 @@ MVP 只实现 `ACMEshIssuer`；测试用 `FakeIssuer`；未来可加 `LegoIssuer
 │   ├── index.html
 │   └── vite.config.ts
 ├── docs/
+│   ├── README.md                # 文档库索引
+│   ├── guide/                   # 安装、配置、开发、CLI
+│   ├── operations/              # 运行手册、安全说明
+│   ├── contributing/            # CI 与发布
+│   ├── reference/               # 许可证
 │   ├── architecture.md          # 本文
-│   └── adr/                     # 关键决策记录
+│   ├── adr/                     # 关键决策记录
+│   ├── poc/                     # 验证记录
+│   └── openapi.yaml             # API 契约
 ├── deploy/
 │   ├── Dockerfile
 │   ├── docker-compose.yml
