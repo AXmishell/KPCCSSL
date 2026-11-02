@@ -1,15 +1,26 @@
-// Package config loads runtime configuration from environment variables.
+// Package config loads runtime configuration from a YAML file and environment
+// variables. Environment variables always win over file values, which win over
+// built-in defaults.
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
+
+// DefaultFile is the config file discovered in the working directory when
+// KPCC_CONFIG is not set.
+const DefaultFile = "kpccssl.yaml"
 
 // Config is the fully resolved runtime configuration.
 type Config struct {
@@ -46,80 +57,145 @@ type Config struct {
 	// WebrootRoots is the allow-list for HTTP-01 webroot directories.
 	WebrootRoots []string
 
+	// ConfigFile is the YAML file that was loaded, empty when none was used.
+	ConfigFile string
+
 	// Version is injected by the build.
 	Version string
 }
 
-// Load reads configuration from the environment and ensures the data layout
-// exists. It never generates secrets; that is the caller's responsibility.
-func Load() (*Config, error) {
-	dataDir := env("KPCC_DATA_DIR", "/data")
-	c := &Config{
-		Listen:        env("KPCC_LISTEN", ":8080"),
-		DataDir:       dataDir,
-		DBPath:        env("KPCC_DB_PATH", filepath.Join(dataDir, "kpccssl.db")),
-		MasterKey:     os.Getenv("KPCC_MASTER_KEY"),
-		MasterKeyFile: env("KPCC_MASTER_KEY_FILE", filepath.Join(dataDir, "master.key")),
-		ACMEBin:       env("KPCC_ACME_BIN", "/opt/acme.sh/acme.sh"),
-		ACMEHome:      env("KPCC_ACME_HOME", filepath.Join(dataDir, "acme")),
-		CertDir:       env("KPCC_CERT_DIR", filepath.Join(dataDir, "certs")),
-		LogDir:        env("KPCC_LOG_DIR", filepath.Join(dataDir, "logs")),
-		BaseURL:       strings.TrimRight(os.Getenv("KPCC_BASE_URL"), "/"),
-		SetupToken:    os.Getenv("KPCC_SETUP_TOKEN"),
-		LogLevel:      env("KPCC_LOG_LEVEL", "info"),
-		RetentionDays: envInt("KPCC_RETENTION_DAYS", 30),
-		HTTPPort:      envInt("KPCC_HTTP_PORT", 8081),
-		TLSPort:       envInt("KPCC_TLS_PORT", 8443),
-		Dev:           envBool("KPCC_DEV", false),
-		FakeACME:      envBool("KPCC_FAKE_ACME", false),
-	}
+// fileConfig mirrors Config for YAML decoding. Pointer fields distinguish
+// "not present" from a meaningful zero value.
+type fileConfig struct {
+	Listen         *string  `yaml:"listen"`
+	DataDir        *string  `yaml:"data_dir"`
+	DBPath         *string  `yaml:"db_path"`
+	MasterKey      *string  `yaml:"master_key"`
+	MasterKeyFile  *string  `yaml:"master_key_file"`
+	ACMEBin        *string  `yaml:"acme_bin"`
+	ACMEHome       *string  `yaml:"acme_home"`
+	CertDir        *string  `yaml:"cert_dir"`
+	LogDir         *string  `yaml:"log_dir"`
+	BaseURL        *string  `yaml:"base_url"`
+	SetupToken     *string  `yaml:"setup_token"`
+	LogLevel       *string  `yaml:"log_level"`
+	TrustedProxies []string `yaml:"trusted_proxies"`
+	JobConcurrency *int     `yaml:"job_concurrency"`
+	JobTimeout     *string  `yaml:"job_timeout"`
+	RetentionDays  *int     `yaml:"retention_days"`
+	HTTPPort       *int     `yaml:"http_port"`
+	TLSPort        *int     `yaml:"tls_port"`
+	Dev            *bool    `yaml:"dev"`
+	FakeACME       *bool    `yaml:"fake_acme"`
+	DeployRoots    []string `yaml:"deploy_roots"`
+	WebrootRoots   []string `yaml:"webroot_roots"`
+}
 
-	if raw := os.Getenv("KPCC_DEPLOY_ROOTS"); raw != "" {
-		for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
-			if p = strings.TrimSpace(p); p != "" {
-				c.DeployRoots = append(c.DeployRoots, p)
+// Load reads configuration from $KPCC_CONFIG, or from kpccssl.yaml in the
+// working directory when it exists, and overlays environment variables.
+func Load() (*Config, error) {
+	path := os.Getenv("KPCC_CONFIG")
+	explicit := path != ""
+	if path == "" {
+		for _, candidate := range []string{DefaultFile, "kpccssl.yml"} {
+			if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+				path = candidate
+				break
 			}
 		}
 	}
-	webroots := env("KPCC_WEBROOT_ROOTS", "/var/www"+string(os.PathListSeparator)+filepath.Join(dataDir, "webroot"))
-	for _, p := range strings.Split(webroots, string(os.PathListSeparator)) {
-		if p = strings.TrimSpace(p); p != "" {
-			c.WebrootRoots = append(c.WebrootRoots, p)
+	return load(path, explicit)
+}
+
+// LoadFile reads configuration from an explicit YAML file and overlays
+// environment variables. A missing file is an error.
+func LoadFile(path string) (*Config, error) {
+	return load(path, true)
+}
+
+func load(path string, mustExist bool) (*Config, error) {
+	var f fileConfig
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if mustExist {
+				return nil, fmt.Errorf("read config %s: %w", path, err)
+			}
+			path = ""
+		} else {
+			dec := yaml.NewDecoder(bytes.NewReader(data))
+			dec.KnownFields(true)
+			if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
+				return nil, fmt.Errorf("parse config %s: %w", path, err)
+			}
 		}
 	}
 
-	conc, err := strconv.Atoi(env("KPCC_JOB_CONCURRENCY", "1"))
-	if err != nil || conc < 1 {
-		return nil, fmt.Errorf("KPCC_JOB_CONCURRENCY must be a positive integer")
-	}
-	c.JobConcurrency = conc
+	// DataDir is resolved first because the other paths default relative to it.
+	dataDir := value("KPCC_DATA_DIR", f.DataDir, "/data")
 
-	timeout, err := time.ParseDuration(env("KPCC_JOB_TIMEOUT", "30m"))
+	c := &Config{
+		Listen:        value("KPCC_LISTEN", f.Listen, ":8080"),
+		DataDir:       dataDir,
+		DBPath:        value("KPCC_DB_PATH", f.DBPath, filepath.Join(dataDir, "kpccssl.db")),
+		MasterKey:     value("KPCC_MASTER_KEY", f.MasterKey, ""),
+		MasterKeyFile: value("KPCC_MASTER_KEY_FILE", f.MasterKeyFile, filepath.Join(dataDir, "master.key")),
+		ACMEBin:       value("KPCC_ACME_BIN", f.ACMEBin, "/opt/acme.sh/acme.sh"),
+		ACMEHome:      value("KPCC_ACME_HOME", f.ACMEHome, filepath.Join(dataDir, "acme")),
+		CertDir:       value("KPCC_CERT_DIR", f.CertDir, filepath.Join(dataDir, "certs")),
+		LogDir:        value("KPCC_LOG_DIR", f.LogDir, filepath.Join(dataDir, "logs")),
+		BaseURL:       strings.TrimRight(value("KPCC_BASE_URL", f.BaseURL, ""), "/"),
+		SetupToken:    value("KPCC_SETUP_TOKEN", f.SetupToken, ""),
+		LogLevel:      value("KPCC_LOG_LEVEL", f.LogLevel, "info"),
+		RetentionDays: intValue("KPCC_RETENTION_DAYS", f.RetentionDays, 30),
+		HTTPPort:      intValue("KPCC_HTTP_PORT", f.HTTPPort, 8081),
+		TLSPort:       intValue("KPCC_TLS_PORT", f.TLSPort, 8443),
+		Dev:           boolValue("KPCC_DEV", f.Dev, false),
+		FakeACME:      boolValue("KPCC_FAKE_ACME", f.FakeACME, false),
+		ConfigFile:    path,
+	}
+
+	concurrency := intValue("KPCC_JOB_CONCURRENCY", f.JobConcurrency, 1)
+	if concurrency < 1 {
+		return nil, fmt.Errorf("job_concurrency must be a positive integer")
+	}
+	c.JobConcurrency = concurrency
+
+	timeoutRaw := value("KPCC_JOB_TIMEOUT", f.JobTimeout, "30m")
+	timeout, err := time.ParseDuration(timeoutRaw)
 	if err != nil || timeout <= 0 {
-		return nil, fmt.Errorf("KPCC_JOB_TIMEOUT must be a positive duration")
+		return nil, fmt.Errorf("job_timeout must be a positive duration, got %q", timeoutRaw)
 	}
 	c.JobTimeout = timeout
 
-	if raw := os.Getenv("KPCC_TRUSTED_PROXIES"); raw != "" {
-		for _, part := range strings.Split(raw, ",") {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-			if _, n, err := net.ParseCIDR(part); err == nil {
-				c.TrustedProxies = append(c.TrustedProxies, n)
-				continue
-			}
-			ip := net.ParseIP(part)
-			if ip == nil {
-				return nil, fmt.Errorf("invalid KPCC_TRUSTED_PROXIES entry %q", part)
-			}
-			bits := 32
-			if ip.To4() == nil {
-				bits = 128
-			}
-			c.TrustedProxies = append(c.TrustedProxies, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	proxies := f.TrustedProxies
+	if raw, ok := os.LookupEnv("KPCC_TRUSTED_PROXIES"); ok && raw != "" {
+		proxies = strings.Split(raw, ",")
+	}
+	for _, part := range proxies {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
+		if _, n, err := net.ParseCIDR(part); err == nil {
+			c.TrustedProxies = append(c.TrustedProxies, n)
+			continue
+		}
+		ip := net.ParseIP(part)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid trusted proxy entry %q", part)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		c.TrustedProxies = append(c.TrustedProxies, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+
+	c.DeployRoots = pathList("KPCC_DEPLOY_ROOTS", f.DeployRoots)
+	c.WebrootRoots = pathList("KPCC_WEBROOT_ROOTS", f.WebrootRoots)
+	if c.WebrootRoots == nil {
+		c.WebrootRoots = splitPaths("/var/www" + string(os.PathListSeparator) + filepath.Join(dataDir, "webroot"))
 	}
 
 	return c, c.EnsureDirs()
@@ -166,27 +242,66 @@ func (c *Config) IsTrustedProxy(remoteIP string) bool {
 	return false
 }
 
-func env(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+// value resolves one string setting: environment, then file, then default.
+func value(envKey string, file *string, def string) string {
+	if v, ok := os.LookupEnv(envKey); ok && v != "" {
 		return v
 	}
+	if file != nil {
+		return *file
+	}
 	return def
 }
 
-func envInt(key string, def int) int {
-	v, err := strconv.Atoi(os.Getenv(key))
-	if err != nil {
+// intValue resolves one integer setting: environment, then file, then default.
+func intValue(envKey string, file *int, def int) int {
+	if v, ok := os.LookupEnv(envKey); ok && v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 		return def
 	}
-	return v
-}
-
-func envBool(key string, def bool) bool {
-	switch strings.ToLower(os.Getenv(key)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
+	if file != nil {
+		return *file
 	}
 	return def
+}
+
+// boolValue resolves one boolean setting: environment, then file, then default.
+func boolValue(envKey string, file *bool, def bool) bool {
+	if v, ok := os.LookupEnv(envKey); ok && v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
+		return def
+	}
+	if file != nil {
+		return *file
+	}
+	return def
+}
+
+// pathList resolves a list setting. The environment variable uses the OS path
+// list separator; the YAML value is already a list.
+func pathList(envKey string, file []string) []string {
+	if raw, ok := os.LookupEnv(envKey); ok && raw != "" {
+		return splitPaths(raw)
+	}
+	if file != nil {
+		return file
+	}
+	return nil
+}
+
+func splitPaths(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

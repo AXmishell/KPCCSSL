@@ -87,7 +87,20 @@ Usage:
   kpccssl doctor           Check runtime prerequisites
   kpccssl admin reset-password --email <email>
   kpccssl version
+
+Config:
+  serve/worker/migrate/doctor/admin accept:
+  --config <file>          YAML config file (default: $KPCC_CONFIG or ./kpccssl.yaml)
 `)
+}
+
+// loadConfig resolves configuration from an explicit file, $KPCC_CONFIG, or a
+// discovered kpccssl.yaml in the working directory.
+func loadConfig(path string) (*config.Config, error) {
+	if path != "" {
+		return config.LoadFile(path)
+	}
+	return config.Load()
 }
 
 func setupLogger(level string) {
@@ -155,8 +168,9 @@ func buildApp(cfg *config.Config) (*app, error) {
 
 func runServe(cmd string, args []string) error {
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+	configPath := fs.String("config", "", "path to the YAML config file")
 	_ = fs.Parse(args)
-	cfg, err := config.Load()
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
@@ -166,7 +180,7 @@ func runServe(cmd string, args []string) error {
 	if err := syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{Cur: 0, Max: 0}); err != nil {
 		slog.Warn("cannot disable core dumps", "error", err)
 	}
-	slog.Info("starting kpccssl", "version", version, "mode", cmd, "data_dir", cfg.DataDir, "fake_acme", cfg.FakeACME)
+	slog.Info("starting kpccssl", "version", version, "mode", cmd, "data_dir", cfg.DataDir, "config_file", cfg.ConfigFile, "fake_acme", cfg.FakeACME)
 
 	a, err := buildApp(cfg)
 	if err != nil {
@@ -236,8 +250,9 @@ func runServe(cmd string, args []string) error {
 func runMigrate(args []string) error {
 	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
 	down := fs.Bool("down", false, "roll back one migration")
+	configPath := fs.String("config", "", "path to the YAML config file")
 	_ = fs.Parse(args)
-	cfg, err := config.Load()
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
@@ -259,12 +274,16 @@ func runMigrate(args []string) error {
 
 func runDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to the YAML config file")
 	_ = fs.Parse(args)
-	cfg, err := config.Load()
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("KPCCSSL doctor %s (%s)\n\n", version, commit)
+	if cfg.ConfigFile != "" {
+		fmt.Printf("config file: %s\n\n", cfg.ConfigFile)
+	}
 	failed := 0
 	check := func(name string, err error) {
 		if err != nil {
@@ -408,8 +427,9 @@ func runAdmin(args []string) error {
 	}
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
 	email := fs.String("email", "", "user email")
+	configPath := fs.String("config", "", "path to the YAML config file")
 	_ = fs.Parse(args[1:])
-	cfg, err := config.Load()
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}

@@ -76,8 +76,45 @@ make build
 
 ## 配置
 
+配置来源优先级：**环境变量 > YAML 文件 > 内置默认值**。环境变量可以覆盖文件中的任意同名配置项。
+
+### YAML 配置文件（可选）
+
+完整示例见 [`kpccssl.example.yaml`](kpccssl.example.yaml)。加载顺序：
+
+1. `--config <file>` 命令行参数（文件不存在时报错）；
+2. `$KPCC_CONFIG` 指定的文件（文件不存在时报错）；
+3. 工作目录下的 `kpccssl.yaml` / `kpccssl.yml`（存在才加载）；
+4. 都没有时仅使用环境变量与默认值。
+
+```bash
+cp kpccssl.example.yaml kpccssl.yaml
+chmod 600 kpccssl.yaml          # 可能含 setup_token / master_key
+./bin/kpccssl serve             # 自动读取 ./kpccssl.yaml
+./bin/kpccssl serve --config /etc/kpccssl/config.yaml
+./bin/kpccssl doctor --config /etc/kpccssl/config.yaml
+```
+
+```yaml
+listen: ":8080"
+data_dir: "/data"
+setup_token: "optional-fixed-token"
+log_level: "info"
+job_concurrency: 1
+job_timeout: "30m"
+trusted_proxies:
+  - "172.16.0.0/12"
+deploy_roots:
+  - "/etc/nginx/certs"
+```
+
+`data_dir` 会作为其他路径的默认基准（如 `db_path`、`master_key_file`）。未知字段会直接报错，避免拼写错误被静默忽略。Docker 部署时挂载文件并设置 `KPCC_CONFIG=/data/kpccssl.yaml` 即可。
+
+### 环境变量
+
 | 变量 | 默认值 | 说明 |
 |---|---|---|
+| `KPCC_CONFIG` | 空 | YAML 配置文件路径 |
 | `KPCC_LISTEN` | `:8080` | 面板/API 监听地址 |
 | `KPCC_DATA_DIR` | `/data` | 数据根目录 |
 | `KPCC_DB_PATH` | `${DATA}/kpccssl.db` | SQLite 路径 |

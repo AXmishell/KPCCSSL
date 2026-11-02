@@ -44,6 +44,11 @@ credentials.json
 !.env.example
 *.local
 
+# ---------- 运行时配置（可能含 setup_token / master_key）----------
+/kpccssl.yaml
+/kpccssl.yml
+!/kpccssl.example.yaml
+
 # ---------- Go ----------
 # 构建产物
 /kpccssl

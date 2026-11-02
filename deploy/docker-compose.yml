@@ -24,6 +24,8 @@ services:
       # Behind a reverse proxy, list its CIDR so X-Forwarded-For is honoured:
       # KPCC_TRUSTED_PROXIES: "172.16.0.0/12"
       # KPCC_BASE_URL: "https://certs.example.com"
+      # Optional YAML config (mount it at ./data/kpccssl.yaml first):
+      # KPCC_CONFIG: "/data/kpccssl.yaml"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/system/health"]
       interval: 30s

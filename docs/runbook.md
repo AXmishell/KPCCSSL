@@ -18,6 +18,23 @@ docker compose logs -f kpccssl
 5. 新建证书 → 选择 CA/域名/DNS 凭据 → 签发。
 6. 需要 HTTP-01 standalone / TLS-ALPN 时，取消 compose 中的 80/443 端口注释并放行防火墙。
 
+### 可选：YAML 配置文件
+
+除 `docker-compose.yml` 的 `environment:` 外，也可以使用 YAML 文件（优先级：环境变量 > 文件 > 默认值）：
+
+```bash
+cp kpccssl.example.yaml deploy/data/kpccssl.yaml
+chmod 600 deploy/data/kpccssl.yaml
+```
+
+在 `deploy/docker-compose.yml` 的 `environment:` 中加入：
+
+```yaml
+KPCC_CONFIG: "/data/kpccssl.yaml"
+```
+
+`--config <file>` 与 `kpccssl doctor --config <file>` 对非容器部署同样适用。未知字段会报错；文件缺失时启动失败（自动发现的 `kpccssl.yaml` 除外）。
+
 ## 2. 反向代理
 
 面板应由 Nginx/Caddy 终止 TLS，转发到 `127.0.0.1:8080`。设置 `KPCC_BASE_URL`、`KPCC_TRUSTED_PROXIES`。

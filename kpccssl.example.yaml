@@ -1,0 +1,69 @@
+# KPCCSSL 配置文件示例
+#
+# 用法（三选一）：
+#   ./bin/kpccssl serve --config /path/to/kpccssl.yaml
+#   KPCC_CONFIG=/path/to/kpccssl.yaml ./bin/kpccssl serve
+#   cp kpccssl.example.yaml kpccssl.yaml && ./bin/kpccssl serve   # 自动发现工作目录下的 kpccssl.yaml
+#
+# 优先级：环境变量 > 本文件 > 内置默认值。
+# 所有字段均可省略；省略即使用默认值。未知字段会导致启动失败（防止拼写错误）。
+# 本文件可能包含 setup_token / master_key 等敏感信息，请设置权限 0600 并勿提交到版本库。
+
+# 面板/API 监听地址。
+listen: ":8080"
+
+# 数据根目录。数据库、主密钥、证书、日志、acme.sh 状态默认都在此目录下。
+data_dir: "/data"
+
+# ---- 路径覆盖（默认值由 data_dir 推导）----
+# db_path: "/data/kpccssl.db"
+# master_key_file: "/data/master.key"
+# acme_home: "/data/acme"
+# cert_dir: "/data/certs"
+# log_dir: "/data/logs"
+
+# 主密钥。留空则从 master_key_file 读取，文件不存在时首次启动自动生成。
+# 一般不要在这里明文填写；如需注入，优先用 KPCC_MASTER_KEY 环境变量。
+# master_key: ""
+
+# acme.sh 可执行文件路径。
+acme_bin: "/opt/acme.sh/acme.sh"
+
+# 首次初始化 token。留空则自动生成，打印到日志并写入 <data_dir>/setup-token。
+# 预置后可在初始化页面直接使用，适合自动化部署。
+# setup_token: ""
+
+# 反向代理后的外部访问地址，例如 "https://certs.example.com"。
+# base_url: ""
+
+# 信任的反向代理 CIDR 列表（仅这些来源的 X-Forwarded-For 会被采信）。
+# trusted_proxies:
+#   - "172.16.0.0/12"
+#   - "10.0.0.0/8"
+
+# 日志级别：debug / info / warn / error。
+log_level: "info"
+
+# 任务配置。
+job_concurrency: 1        # worker 数；acme.sh 仍由 flock 串行
+job_timeout: "30m"        # 单任务超时
+retention_days: 30        # 任务日志保留天数
+
+# ACME 挑战端口。
+http_port: 8081           # HTTP-01 standalone
+tls_port: 8443            # TLS-ALPN-01
+
+# 本地文件部署允许根目录（certificate 部署到本机路径时的白名单）。
+# deploy_roots:
+#   - "/etc/nginx/certs"
+
+# HTTP-01 webroot 允许根目录。默认 "/var/www" 与 "<data_dir>/webroot"。
+# webroot_roots:
+#   - "/var/www"
+#   - "/data/webroot"
+
+# 开发模式：关闭 Secure Cookie，允许 localhost 走 http。仅本地使用。
+dev: false
+
+# 使用内置 fake ACME 引擎，无需 acme.sh / DNS 凭据。仅开发与 E2E 测试。
+fake_acme: false
