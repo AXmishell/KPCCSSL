@@ -5,7 +5,7 @@
 
 ## 决策
 
-在 PROJECT.md 基线 `jobs` 表上增加 `available_at INTEGER NOT NULL DEFAULT 0` 与索引 `idx_jobs_available(status, available_at)`。
+在早期设计基线的 `jobs` 表上增加 `available_at INTEGER NOT NULL DEFAULT 0` 与索引 `idx_jobs_available(status, available_at)`。
 
 - `ClaimNext` 只领取 `status='queued' AND available_at <= now` 的任务。
 - 失败重试原地复用同一行：`attempts` 已由 claim 递增，设置新的 `available_at` 后回到 queued，保留同一 job id 与日志文件。

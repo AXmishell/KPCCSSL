@@ -1,4 +1,4 @@
-// Package api exposes the HTTP contract described in PROJECT.md section 6.
+// Package api exposes the HTTP contract described in docs/openapi.yaml.
 package api
 
 import (

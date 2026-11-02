@@ -5,7 +5,7 @@
 
 ## 背景
 
-PROJECT.md 基线选择 `sqlc + goose`。实际实现中，证书列表需要动态筛选（status/search/cursor）、任务领取依赖 `UPDATE ... RETURNING`、部分更新用乐观锁，sqlc 生成代码会引入较多一次性查询变体。
+早期基线选择 `sqlc + goose`。实际实现中，证书列表需要动态筛选（status/search/cursor）、任务领取依赖 `UPDATE ... RETURNING`、部分更新用乐观锁，sqlc 生成代码会引入较多一次性查询变体。
 
 ## 决策
 

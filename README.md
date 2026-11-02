@@ -6,7 +6,7 @@
 
 自托管的 Web 证书签发与管理工具：Go 后端 + React SPA + SQLite，ACME 引擎使用固定版本的 [acme.sh](https://github.com/acmesh-official/acme.sh)。
 
-> 当前状态：**Phase 0–4 的 MVP 主链路已实现**（认证、CA/DNS/证书管理、DNS-01 签发、任务队列、实时日志、续期、吊销、部署、通知、审计、下载）。真实 acme.sh + Pebble 的 HTTP-01 已验证；真实 DNS provider 的 staging 签发（P0-10）仍需在目标环境完成，见 [PROJECT.md](PROJECT.md)。
+> 当前状态：**Phase 0–4 的 MVP 主链路已实现**（认证、CA/DNS/证书管理、DNS-01 签发、任务队列、实时日志、续期、吊销、部署、通知、审计、下载）。真实 acme.sh + Pebble 的 HTTP-01 已验证；真实 DNS provider 的 staging 签发仍需在目标环境完成。
 
 ## 能力
 
@@ -167,7 +167,7 @@ make migrate-up
 make scan
 ```
 
-API 契约见 [docs/openapi.yaml](docs/openapi.yaml)，运行/备份/升级见 [docs/runbook.md](docs/runbook.md)，实施计划见 [PROJECT.md](PROJECT.md)。
+API 契约见 [docs/openapi.yaml](docs/openapi.yaml)，运行/备份/升级见 [docs/runbook.md](docs/runbook.md)，架构说明见 [docs/architecture.md](docs/architecture.md)。
 
 ## CI / 发布自动化
 

@@ -3,7 +3,6 @@
 > 状态：设计草案 v0.1  
 > 日期：2026-10-31  
 > 目标：用 Go + React SPA 实现一个自托管的 Web 证书签发工具，ACME 引擎使用 [acme.sh](https://github.com/acmesh-official/acme.sh)。  
-> 实施任务、数据模型和验收清单见 [`PROJECT.md`](../PROJECT.md)。
 
 ---
 
