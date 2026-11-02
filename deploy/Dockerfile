@@ -1,5 +1,5 @@
 # ---- frontend -------------------------------------------------------------
-FROM node:22-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./web/
 RUN cd web && npm ci --no-audit --no-fund
@@ -8,7 +8,7 @@ COPY internal/webui ./internal/webui
 RUN cd web && npm run build
 
 # ---- backend --------------------------------------------------------------
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 ARG ACME_VERSION=3.1.6
 ARG VERSION=docker
 ARG COMMIT=unknown
@@ -32,7 +32,7 @@ RUN mkdir -p /out/acme && \
     cp /out/acme/LICENSE.md /out/acme-LICENSE.md
 
 # ---- runtime --------------------------------------------------------------
-FROM alpine:3.21
+FROM alpine:3.24
 ARG ACME_VERSION=3.1.6
 ARG APK_MIRROR=
 
