@@ -220,7 +220,7 @@ export default {
       node: "Node",
       noNodes: "No nodes yet.",
       autoLayout: "Auto layout",
-      connectHint: "Drag the green output port to a target node's left input port. You can also click the output port, then the input port.",
+      connectHint: "Drag the green output port to a target node's left input port. You can also click the output port, then the input port. Drag the empty background to pan the canvas.",
       inputPort: "Input port",
       outputPort: "Output port",
       edgeCondition: "Connection condition",

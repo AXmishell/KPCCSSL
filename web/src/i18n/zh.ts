@@ -226,7 +226,7 @@ export default {
       node: "节点",
       noNodes: "还没有节点。",
       autoLayout: "自动布局",
-      connectHint: "拖动绿色输出端口到目标节点左侧输入端口即可建立连接；也可以先点击输出端口，再点击输入端口。",
+      connectHint: "拖动绿色输出端口到目标节点左侧输入端口即可建立连接；也可以先点击输出端口，再点击输入端口。拖动空白背景可平移画布。",
       inputPort: "输入端口",
       outputPort: "输出端口",
       edgeCondition: "连接条件",

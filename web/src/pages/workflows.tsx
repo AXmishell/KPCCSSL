@@ -424,6 +424,9 @@ function GraphEditor({
   const [pendingFrom, setPendingFrom] = React.useState("");
   const [connect, setConnect] = React.useState<{ from: string; x: number; y: number; startX: number; startY: number; moved: boolean } | null>(null);
   const drag = React.useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const pan = React.useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number; moved: boolean } | null>(null);
+  const suppressCanvasClick = React.useRef(false);
+  const [panning, setPanning] = React.useState(false);
 
   const width = Math.max(1600, ...form.nodes.map((n) => n.position.x + NODE_W + 360));
   const height = Math.max(720, ...form.nodes.map((n) => n.position.y + NODE_H + 240));
@@ -478,6 +481,42 @@ function GraphEditor({
       window.removeEventListener("pointerup", up);
     };
   }, [setForm]);
+
+  React.useEffect(() => {
+    const move = (e: PointerEvent) => {
+      const p = pan.current;
+      const el = canvasRef.current;
+      if (!p || !el) return;
+      const dx = e.clientX - p.startX;
+      const dy = e.clientY - p.startY;
+      if (!p.moved && Math.hypot(dx, dy) > 3) {
+        p.moved = true;
+        setPanning(true);
+      }
+      if (!p.moved) return;
+      e.preventDefault();
+      el.scrollLeft = p.scrollLeft - dx;
+      el.scrollTop = p.scrollTop - dy;
+    };
+    const up = () => {
+      if (pan.current?.moved) {
+        // The click event fired after a pan must not clear the selection.
+        suppressCanvasClick.current = true;
+      }
+      pan.current = null;
+      setPanning(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("blur", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("blur", up);
+    };
+  }, []);
 
   const addEdge = (from: string, to: string) => {
     if (!from || !to || from === to) return;
@@ -558,13 +597,38 @@ function GraphEditor({
         <p className="mb-2 text-xs text-muted-foreground">{t("workflow.connectHint")}</p>
         <div
           ref={canvasRef}
-          className="relative h-[560px] overflow-auto rounded-md border border-border bg-muted/10"
+          className="relative h-[560px] select-none overflow-auto rounded-md border border-border bg-muted/10"
           style={{
             backgroundImage: "radial-gradient(circle, rgba(120,120,120,.28) 1px, transparent 1px)",
             backgroundSize: "20px 20px",
-            cursor: connect ? "crosshair" : "default",
+            backgroundAttachment: "local",
+            cursor: connect ? "crosshair" : panning ? "grabbing" : "grab",
           }}
-          onClick={() => { setSelectedNode(""); setSelectedEdge(""); setPendingFrom(""); }}
+          onPointerDown={(e) => {
+            suppressCanvasClick.current = false;
+            if (e.button !== 0 || e.pointerType !== "mouse" || connect) return;
+            const target = e.target as HTMLElement;
+            if (target.closest("[data-node], [data-port], [data-edge]")) return;
+            const el = canvasRef.current;
+            if (!el) return;
+            e.preventDefault();
+            pan.current = {
+              startX: e.clientX,
+              startY: e.clientY,
+              scrollLeft: el.scrollLeft,
+              scrollTop: el.scrollTop,
+              moved: false,
+            };
+          }}
+          onClick={() => {
+            if (suppressCanvasClick.current) {
+              suppressCanvasClick.current = false;
+              return;
+            }
+            setSelectedNode("");
+            setSelectedEdge("");
+            setPendingFrom("");
+          }}
         >
           <div className="relative" style={{ width, height }}>
             <svg width={width} height={height} className="absolute inset-0">
@@ -583,7 +647,7 @@ function GraphEditor({
                 const path = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
                 const color = e.condition === "failure" ? "#dc2626" : e.condition === "always" ? "#ca8a04" : "#2563eb";
                 return (
-                  <g key={e.id} className="cursor-pointer" onClick={(ev) => { ev.stopPropagation(); setSelectedEdge(e.id); setSelectedNode(""); }}>
+                  <g key={e.id} data-edge={e.id} className="cursor-pointer" onClick={(ev) => { ev.stopPropagation(); setSelectedEdge(e.id); setSelectedNode(""); }}>
                     <path d={path} fill="none" stroke="transparent" strokeWidth={14} />
                     <path d={path} fill="none" stroke={selectedEdge === e.id ? color : "currentColor"} strokeWidth={selectedEdge === e.id ? 2.5 : 1.6} markerEnd="url(#arrow)" className="text-muted-foreground/60" style={{ color: selectedEdge === e.id ? color : undefined }} />
                     <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 6} textAnchor="middle" fontSize="10" fill={color}>{e.condition}</text>
@@ -601,7 +665,8 @@ function GraphEditor({
             {form.nodes.map((n) => (
               <div
                 key={n.id}
-                className={`absolute select-none rounded-md border bg-card shadow-sm transition-shadow ${selectedNode === n.id ? "border-primary ring-2 ring-primary/20" : "border-border"}`}
+                data-node={n.id}
+                className={`absolute cursor-move select-none rounded-md border bg-card shadow-sm transition-shadow ${selectedNode === n.id ? "border-primary ring-2 ring-primary/20" : "border-border"}`}
                 style={{ left: n.position.x, top: n.position.y, width: NODE_W, height: NODE_H }}
                 onClick={(e) => { e.stopPropagation(); setSelectedNode(n.id); setSelectedEdge(""); }}
                 onPointerDown={(e) => {
