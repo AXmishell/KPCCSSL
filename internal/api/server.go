@@ -147,6 +147,8 @@ func (s *Server) routes() http.Handler {
 			op.Post("/deployments", s.createDeployment)
 			op.Patch("/deployments/{id}", s.updateDeployment)
 			op.Delete("/deployments/{id}", s.deleteDeployment)
+			op.Post("/deployments/test", s.testDeploymentConfig)
+			op.Post("/deployments/{id}/test", s.testDeployment)
 			op.Post("/jobs/{id}/cancel", s.cancelJob)
 			op.Post("/jobs/{id}/retry", s.retryJob)
 			op.Post("/workflows/{id}/run", s.runWorkflow)

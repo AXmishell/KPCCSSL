@@ -88,6 +88,27 @@ func (s *Service) DeleteDeployment(ctx context.Context, id string) error {
 	return s.Store.DeleteDeployment(ctx, id)
 }
 
+// TestDeployment validates a deployment configuration and checks
+// connectivity without changing the target.
+func (s *Service) TestDeployment(ctx context.Context, depType string, config json.RawMessage) error {
+	if strings.TrimSpace(depType) == "" {
+		return errors.New("type is required")
+	}
+	if len(config) == 0 {
+		return errors.New("config is required")
+	}
+	return s.Deployer.Test(ctx, depType, string(config))
+}
+
+// TestDeploymentByID checks a saved deployment target.
+func (s *Service) TestDeploymentByID(ctx context.Context, id string) error {
+	d, err := s.Store.GetDeployment(ctx, id)
+	if err != nil {
+		return err
+	}
+	return s.Deployer.TestStored(ctx, d)
+}
+
 // DeployNow enqueues deployment of the current revision.
 func (s *Service) DeployNow(ctx context.Context, certID, idem string) ([]*store.Job, error) {
 	c, err := s.Store.GetCertificate(ctx, certID)

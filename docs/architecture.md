@@ -116,7 +116,7 @@
 ### 3.3 后续
 
 - Controller + Agent：向多台目标机分发证书。
-- Kubernetes Secret、阿里云/腾讯云负载均衡/CDN 部署。
+- Kubernetes Secret、更多云厂商 CDN/WAF/LB 与 Agent 拉取部署。
 - OIDC/LDAP、多租户。
 - 证书透明度（CT）监控、域名到期监控。
 - 手工 DNS 两阶段签发（需要抓取并保存 challenge token）。
@@ -588,8 +588,9 @@ acme.sh 的插件没有统一元数据，需要自建一个静态目录（嵌入
 | 本地文件 | 复制到允许根目录下的路径 | 路径白名单、EvalSymlinks、原子写、备份 |
 | 本机服务重载 | `nginx -s reload`、`systemctl reload nginx` | 只允许固定 argv 模板，不接受自由 shell |
 | Webhook | POST 证书/元数据到外部 URL | HMAC 签名、超时、禁止内网地址（防 SSRF）、重试 |
-| SSH/SFTP | 推送到远程主机并执行固定重载命令 | 主机密钥校验、密钥加密、命令白名单；后续再做 |
-| Kubernetes/云 LB | 更新 Secret/证书 | 需要云凭据，权限最小化；后续再做 |
+| SSH/SFTP | 推送到远程主机并执行固定重载命令 | 主机密钥指纹、密钥加密、路径校验、原子写、固定 reload 白名单 |
+| 宝塔/1Panel | 调用面板 API 更新面板 SSL 或指定站点 | 管理员配置的私有地址、API key 加密、可选 TLS 校验开关 |
+| 腾讯云/阿里云 CDN/WAF | 上传证书并绑定域名 | AK/SK 加密、最小权限 RAM/策略、异步任务结果检查 |
 
 **不要**把 acme.sh 的 `--reloadcmd` 直接暴露给用户。若确实需要管理员自定义命令，放在“高级/危险”设置里，默认关闭，并要求重新认证 + 审计。
 
@@ -672,6 +673,8 @@ REST + JSON，异步操作返回 `202 Accepted` + `job_id`。
 | GET | `/api/v1/certificates/{id}/revisions` | 历史版本 |
 | GET | `/api/v1/certificates/{id}/download?format=pem\|zip\|pfx` | 下载 |
 | POST | `/api/v1/certificates/{id}/deploy` | 立即部署 |
+| POST | `/api/v1/deployments/test` | 测试部署配置（不落库） |
+| POST | `/api/v1/deployments/{id}/test` | 测试已保存的部署目标 |
 | GET | `/api/v1/jobs/{id}` | 任务状态 |
 | GET | `/api/v1/jobs/{id}/events` | SSE 实时日志 |
 | GET | `/api/v1/audit-logs` | 审计 |

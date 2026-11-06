@@ -652,6 +652,30 @@ paths:
       operationId: deleteDeployment
       responses:
         "204": { description: Deleted }
+  /deployments/test:
+    post:
+      operationId: testDeploymentConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, config]
+              properties:
+                type: { type: string }
+                config: { type: object, additionalProperties: true }
+      responses:
+        "204": { description: Connection test succeeded }
+        "400": { $ref: "#/components/responses/Problem" }
+  /deployments/{id}/test:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: testDeployment
+      responses:
+        "204": { description: Connection test succeeded }
+        "400": { $ref: "#/components/responses/Problem" }
   /notification-channels:
     get:
       operationId: listNotificationChannels
@@ -1143,7 +1167,21 @@ components:
         id: { type: string }
         certificate_id: { type: string }
         name: { type: string }
-        type: { type: string, enum: [local_file, reload, webhook] }
+        type:
+          type: string
+          enum:
+            - local_file
+            - reload
+            - webhook
+            - ssh
+            - baota_panel
+            - baota_site
+            - 1panel_panel
+            - 1panel_site
+            - tencent_cdn
+            - tencent_waf
+            - aliyun_cdn
+            - aliyun_waf
         enabled: { type: boolean }
         last_run_at: { type: [integer, "null"] }
         last_status: { type: [string, "null"] }
@@ -1153,7 +1191,21 @@ components:
       properties:
         certificate_id: { type: string }
         name: { type: string }
-        type: { type: string, enum: [local_file, reload, webhook] }
+        type:
+          type: string
+          enum:
+            - local_file
+            - reload
+            - webhook
+            - ssh
+            - baota_panel
+            - baota_site
+            - 1panel_panel
+            - 1panel_site
+            - tencent_cdn
+            - tencent_waf
+            - aliyun_cdn
+            - aliyun_waf
         config: { type: object, additionalProperties: true }
         enabled: { type: boolean }
     NotificationChannel:

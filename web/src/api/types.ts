@@ -129,11 +129,25 @@ export interface CertEvent {
   created_at: number;
 }
 
+export type DeploymentType =
+  | "local_file"
+  | "reload"
+  | "webhook"
+  | "ssh"
+  | "baota_panel"
+  | "baota_site"
+  | "1panel_panel"
+  | "1panel_site"
+  | "tencent_cdn"
+  | "tencent_waf"
+  | "aliyun_cdn"
+  | "aliyun_waf";
+
 export interface Deployment {
   id: string;
   certificate_id: string;
   name: string;
-  type: "local_file" | "reload" | "webhook";
+  type: DeploymentType;
   enabled: boolean;
   last_run_at: number | null;
   last_status: string | null;

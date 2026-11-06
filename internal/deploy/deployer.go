@@ -141,6 +141,56 @@ func (d *Deployer) Run(ctx context.Context, dep *store.Deployment, rev *store.Re
 			return fmt.Errorf("invalid config: %w", err)
 		}
 		return d.webhook(ctx, cfg, dep, rev)
+	case "ssh":
+		var cfg SSHConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		bundle, err := bundleFromRevision(rev)
+		if err != nil {
+			return err
+		}
+		return DeploySSH(ctx, cfg, bundle)
+	case "baota_panel", "baota_site":
+		var cfg BaotaConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		bundle, err := bundleFromRevision(rev)
+		if err != nil {
+			return err
+		}
+		return DeployBaota(ctx, dep.Type, cfg, bundle)
+	case "1panel_panel", "1panel_site":
+		var cfg OnePanelConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		bundle, err := bundleFromRevision(rev)
+		if err != nil {
+			return err
+		}
+		return DeployOnePanel(ctx, dep.Type, cfg, bundle)
+	case "tencent_cdn", "tencent_waf":
+		var cfg TencentConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		bundle, err := bundleFromRevision(rev)
+		if err != nil {
+			return err
+		}
+		return DeployTencent(ctx, dep.Type, cfg, bundle)
+	case "aliyun_cdn", "aliyun_waf":
+		var cfg AliyunConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		bundle, err := bundleFromRevision(rev)
+		if err != nil {
+			return err
+		}
+		return DeployAliyun(ctx, dep.Type, cfg, bundle)
 	}
 	return fmt.Errorf("unsupported deployment type %q", dep.Type)
 }
@@ -173,8 +223,97 @@ func (d *Deployer) Validate(depType, configJSON string) error {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
 		return ValidateWebhookURL(cfg.URL)
+	case "ssh":
+		var cfg SSHConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return cfg.validate()
+	case "baota_panel", "baota_site":
+		var cfg BaotaConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return cfg.validate(depType == "baota_site")
+	case "1panel_panel", "1panel_site":
+		var cfg OnePanelConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return cfg.validate(depType == "1panel_site")
+	case "tencent_cdn", "tencent_waf":
+		var cfg TencentConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return cfg.validate()
+	case "aliyun_cdn", "aliyun_waf":
+		var cfg AliyunConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return cfg.validate()
 	}
 	return errors.New("unsupported deployment type")
+}
+
+// Test validates a deployment configuration and performs a non-mutating
+// connectivity check. It is used by the "test connection" button in the UI.
+func (d *Deployer) Test(ctx context.Context, depType, configJSON string) error {
+	if err := d.Validate(depType, configJSON); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	switch depType {
+	case "local_file":
+		return nil
+	case "reload":
+		return nil
+	case "webhook":
+		return nil
+	case "ssh":
+		var cfg SSHConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return err
+		}
+		return TestSSH(ctx, cfg)
+	case "baota_panel", "baota_site":
+		var cfg BaotaConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return err
+		}
+		return TestBaota(ctx, cfg)
+	case "1panel_panel", "1panel_site":
+		var cfg OnePanelConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return err
+		}
+		return TestOnePanel(ctx, cfg)
+	case "tencent_cdn", "tencent_waf":
+		var cfg TencentConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return err
+		}
+		return TestTencent(ctx, cfg)
+	case "aliyun_cdn", "aliyun_waf":
+		var cfg AliyunConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return err
+		}
+		return TestAliyun(ctx, depType, cfg)
+	}
+	return fmt.Errorf("unsupported deployment type %q", depType)
+}
+
+// TestStored decrypts a saved deployment and runs Test against its config.
+func (d *Deployer) TestStored(ctx context.Context, dep *store.Deployment) error {
+	plain, err := d.Box.Decrypt(dep.ConfigEnc, aad(dep.ID, "config"))
+	if err != nil {
+		return fmt.Errorf("decrypt deployment config: %w", err)
+	}
+	return d.Test(ctx, dep.Type, string(plain))
 }
 
 func (d *Deployer) localFile(cfg LocalFileConfig, rev *store.Revision) error {

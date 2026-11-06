@@ -588,6 +588,35 @@ func (s *Server) deleteDeployment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) testDeploymentConfig(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Type   string          `json:"type"`
+		Config json.RawMessage `json:"config"`
+	}
+	if err := decodeJSON(w, r, &in, 128*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if err := s.Svc.TestDeployment(r.Context(), in.Type, in.Config); err != nil {
+		s.audit(r, "deployment.test", "deployment", in.Type, "error", err.Error())
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "deployment.test", "deployment", in.Type, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) testDeployment(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.Svc.TestDeploymentByID(r.Context(), id); err != nil {
+		s.audit(r, "deployment.test", "deployment", id, "error", err.Error())
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "deployment.test", "deployment", id, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Store.ListNotificationChannels(r.Context())
 	if err != nil {

@@ -6,6 +6,7 @@
 - **不提供任意 shell hook**：外部命令只能是 acme.sh 的白名单参数，或部署模块内置的固定 reload argv。
 - **最小权限部署**：本地文件部署目标必须位于 `KPCC_DEPLOY_ROOTS` 白名单内；HTTP-01 webroot 同样受 `KPCC_WEBROOT_ROOTS` 限制。
 - **Webhook 仅 HTTPS**：拒绝私网/回环地址，并在实际连接时再次校验，防止 DNS rebinding。
+- **远程部署受限**：SSH 默认要求主机密钥指纹，只允许固定 reload 命令；面板地址与云 API 凭据整体加密，`ignore_tls` / `insecure_ignore_host_key` 需显式开启。
 - **审计**：登录、CA/DNS/证书操作、部署、私钥下载都会写入审计日志。
 
 ## 凭据与密钥

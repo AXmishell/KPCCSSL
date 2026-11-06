@@ -9,6 +9,8 @@ acme.sh 的 `--reloadcmd` / hook 等价于任意 shell 执行。把它暴露给 
 
 ## 决策
 
+> 后续扩展（SSH、宝塔/1Panel、云 CDN/WAF）见 [ADR-008](ADR-008-deployment-targets.md)，仍遵守本文的“无自由 shell”约束。
+
 部署只允许三种结构化目标：
 
 1. `local_file`：在 `KPCC_DEPLOY_ROOTS` 允许根目录内写文件。路径经过绝对路径、`..`、EvalSymlinks 检查；同目录临时文件 + fsync + rename 原子替换；可选保留 `.bak`。

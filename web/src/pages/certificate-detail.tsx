@@ -17,7 +17,8 @@ import {
 import { useAuth } from "@/auth";
 import { download, errorMessage, request } from "@/api/client";
 import { qk, useCertEvents, useCertificate, useDeployments, useRevisions } from "@/api/queries";
-import type { CertInput, Deployment } from "@/api/types";
+import type { CertInput } from "@/api/types";
+import { DeploymentDialog } from "@/components/deployment-dialog";
 import { Badge, statusVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -410,7 +411,7 @@ export function CertificateDetailPage() {
                 {deployments.items.map((d) => (
                   <tr key={d.id}>
                     <Td className="font-medium">{d.name}</Td>
-                    <Td>{d.type}</Td>
+                    <Td>{t(`deploy.types.${d.type}`, { defaultValue: d.type })}</Td>
                     <Td>
                       <Badge variant={d.enabled ? statusVariant(d.last_status ?? "ok") : "muted"}>
                         {d.enabled ? (d.last_status ?? "—") : t("common.disabled")}
@@ -627,113 +628,6 @@ function StepUpDialog({
           >
             {t("auth.reauthenticate")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function DeploymentDialog({
-  open,
-  onOpenChange,
-  certId,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  certId: string;
-  onCreated: () => void;
-}) {
-  const { t } = useTranslation();
-  const [type, setType] = React.useState<Deployment["type"]>("local_file");
-  const [name, setName] = React.useState("");
-  const [dir, setDir] = React.useState("");
-  const [target, setTarget] = React.useState("nginx");
-  const [url, setUrl] = React.useState("");
-  const [secret, setSecret] = React.useState("");
-  const [error, setError] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-
-  const submit = async () => {
-    let config: Record<string, unknown>;
-    if (type === "local_file") {
-      config = {
-        directory: dir,
-        cert_file: "cert.pem",
-        key_file: "privkey.pem",
-        chain_file: "chain.pem",
-        fullchain_file: "fullchain.pem",
-        mode: "0640",
-        backup: true,
-      };
-    } else if (type === "reload") {
-      config = { target };
-    } else {
-      config = { url, secret };
-    }
-    setBusy(true);
-    setError("");
-    try {
-      await request("/deployments", {
-        method: "POST",
-        body: { certificate_id: certId, name: name || type, type, config, enabled: true },
-      });
-      toast.success(t("deploy.created"));
-      onCreated();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("deploy.add")}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          {error && <ErrorBox message={error} />}
-          <Field label={t("common.name")}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nginx-prod" />
-          </Field>
-          <Field label={t("common.type")}>
-            <Select value={type} onChange={(e) => setType(e.target.value as Deployment["type"])}>
-              <option value="local_file">{t("deploy.local")}</option>
-              <option value="reload">{t("deploy.reload")}</option>
-              <option value="webhook">{t("deploy.webhook")}</option>
-            </Select>
-          </Field>
-          {type === "local_file" && (
-            <Field label={t("deploy.directory")}>
-              <Input value={dir} onChange={(e) => setDir(e.target.value)} placeholder="/etc/nginx/certs" />
-            </Field>
-          )}
-          {type === "reload" && (
-            <Field label={t("deploy.target")}>
-              <Select value={target} onChange={(e) => setTarget(e.target.value)}>
-                <option value="nginx">nginx -s reload</option>
-                <option value="systemd-nginx">systemctl reload nginx</option>
-                <option value="systemd-apache">systemctl reload apache2</option>
-                <option value="apache">apachectl graceful</option>
-              </Select>
-            </Field>
-          )}
-          {type === "webhook" && (
-            <>
-              <Field label={t("deploy.url")}>
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/hook" />
-              </Field>
-              <Field label={t("deploy.secret")} hint={t("common.optional")}>
-                <Input value={secret} onChange={(e) => setSecret(e.target.value)} />
-              </Field>
-            </>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
-          <Button onClick={submit} disabled={busy}>{t("common.save")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
