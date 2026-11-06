@@ -680,7 +680,11 @@ function GraphEditor({
                     <GitBranch className="h-3.5 w-3.5 text-primary" />
                     {t(`workflow.types.${n.type}`)}
                   </div>
-                  <span className="max-w-[90px] truncate text-[10px] text-muted-foreground">{n.name || n.id}</span>
+                  {n.name && (
+                    <span className="max-w-[90px] truncate text-[10px] text-muted-foreground" title={n.id}>
+                      {n.name}
+                    </span>
+                  )}
                 </div>
                 <div className="px-3 py-2 text-[11px] text-muted-foreground">
                   {nodeSummary(n, t)}
@@ -814,9 +818,11 @@ function StepEditor({
               {stepTypes.map((type) => <option key={type} value={type}>{t(`workflow.types.${type}`)}</option>)}
             </Select>
           </Field>
-          <Field label={t("common.name")} className="min-w-40 flex-1">
-            <Input value={step.name ?? ""} onChange={(e) => onChange({ name: e.target.value })} />
-          </Field>
+          {!graphMode && (
+            <Field label={t("common.name")} className="min-w-40 flex-1">
+              <Input value={step.name ?? ""} onChange={(e) => onChange({ name: e.target.value })} />
+            </Field>
+          )}
           {!graphMode && (
             <>
               <Field label={t("workflow.when")} className="w-36">
