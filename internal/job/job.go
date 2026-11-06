@@ -336,7 +336,14 @@ func (r *Runner) execute(parent context.Context, j *store.Job) {
 	}()
 
 	fmt.Fprintf(w, "=== job %s (%s), attempt %d/%d ===\n", j.ID, j.Type, j.Attempts, j.MaxAttempts)
-	err := h(ctx, j, w)
+	err := func() (err error) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				err = fmt.Errorf("panic in %s handler: %v", j.Type, rec)
+			}
+		}()
+		return h(ctx, j, w)
+	}()
 	close(stopHeartbeat)
 	if err != nil {
 		var ae *acme.Error

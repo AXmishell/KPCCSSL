@@ -25,6 +25,13 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// CountActiveAdmins returns enabled administrators.
+func (s *Store) CountActiveAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role='admin' AND disabled=0`).Scan(&n)
+	return n, err
+}
+
 // GetUserByEmail looks up a user by email.
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	return s.scanUser(s.db.QueryRowContext(ctx, userCols+` WHERE email = ?`, email))

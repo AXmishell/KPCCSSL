@@ -139,14 +139,20 @@ func InstallArgs(domain, keyType, home string, out acme.ExportPaths) ([]string, 
 // RevokeArgs builds `--revoke`.
 func RevokeArgs(req acme.RevokeRequest, home string) ([]string, error) {
 	args := []string{"--revoke", "--home", home, "--no-color"}
-	if req.Domain != "" {
+	if req.DirectoryURL != "" {
+		args = append(args, "--server", req.DirectoryURL)
+	}
+	switch {
+	case req.RevokeCertPath != "":
+		// The exported revision is authoritative and still works when the
+		// acme.sh domain directory was lost or deleted.
+		args = append(args, "--cert-file", req.RevokeCertPath)
+	case req.Domain != "":
 		args = append(args, "-d", req.Domain)
 		if acme.IsECC(req.KeyType) {
 			args = append(args, "--ecc")
 		}
-	} else if req.RevokeCertPath != "" {
-		args = append(args, "--cert-file", req.RevokeCertPath)
-	} else {
+	default:
 		return nil, fmt.Errorf("domain or certificate path is required")
 	}
 	if req.Reason >= 0 && req.Reason <= 10 {

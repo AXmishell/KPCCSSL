@@ -41,6 +41,7 @@ export function statusVariant(status: string): BadgeProps["variant"] {
     case "pending":
     case "new":
     case "unverified":
+    case "partial":
       return "warning";
     case "failed":
     case "revoked":

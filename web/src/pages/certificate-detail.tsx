@@ -17,7 +17,8 @@ import {
 import { useAuth } from "@/auth";
 import { download, errorMessage, request } from "@/api/client";
 import { qk, useCertEvents, useCertificate, useDeployments, useRevisions } from "@/api/queries";
-import type { CertInput, Deployment } from "@/api/types";
+import type { CertInput } from "@/api/types";
+import { DeploymentDialog } from "@/components/deployment-dialog";
 import { Badge, statusVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,7 +43,15 @@ export function CertificateDetailPage() {
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [pfxOpen, setPfxOpen] = React.useState(false);
   const [deployOpen, setDeployOpen] = React.useState(false);
+  const [stepUpOpen, setStepUpOpen] = React.useState(false);
+  const [stepUpAction, setStepUpAction] = React.useState<((token: string) => void | Promise<void>) | null>(null);
   const [busy, setBusy] = React.useState("");
+  const pfxToken = React.useRef("");
+
+  const requireStepUp = (action: (token: string) => void | Promise<void>) => {
+    setStepUpAction(() => action);
+    setStepUpOpen(true);
+  };
 
   const cert = data?.certificate;
   const canEdit = user?.role === "admin" || user?.role === "operator";
@@ -229,22 +238,33 @@ export function CertificateDetailPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={async () => {
+                        onClick={() => {
                           if (!window.confirm(t("cert.privateKeyConfirm"))) return;
-                          try {
-                            await download(`/certificates/${id}/download?format=zip`, undefined, {
-                              headers: { "X-Confirm-Private-Key": "yes" },
-                            });
-                          } catch (err) {
-                            toast.error(errorMessage(err));
-                          }
+                          requireStepUp(async (token) => {
+                            try {
+                              await download(`/certificates/${id}/download?format=zip`, undefined, {
+                                headers: { "X-Step-Up-Token": token },
+                              });
+                            } catch (err) {
+                              toast.error(errorMessage(err));
+                            }
+                          });
                         }}
                       >
                         <FileDown className="h-3.5 w-3.5" /> ZIP
                       </Button>
                     )}
                     {canEdit && (
-                      <Button size="sm" variant="outline" onClick={() => setPfxOpen(true)}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          requireStepUp((token) => {
+                            pfxToken.current = token;
+                            setPfxOpen(true);
+                          })
+                        }
+                      >
                         PFX
                       </Button>
                     )}
@@ -252,15 +272,17 @@ export function CertificateDetailPage() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={async () => {
+                        onClick={() => {
                           if (!window.confirm(t("cert.privateKeyConfirm"))) return;
-                          try {
-                            await download(`/certificates/${id}/download?format=pem&key=true`, undefined, {
-                              headers: { "X-Confirm-Private-Key": "yes" },
-                            });
-                          } catch (err) {
-                            toast.error(errorMessage(err));
-                          }
+                          requireStepUp(async (token) => {
+                            try {
+                              await download(`/certificates/${id}/download?format=pem&key=true`, undefined, {
+                                headers: { "X-Step-Up-Token": token },
+                              });
+                            } catch (err) {
+                              toast.error(errorMessage(err));
+                            }
+                          });
                         }}
                       >
                         <KeyRound className="h-3.5 w-3.5" /> {t("cert.privateKey")}
@@ -301,15 +323,17 @@ export function CertificateDetailPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={async () => {
+                      onClick={() => {
                         if (!window.confirm(t("cert.privateKeyConfirm"))) return;
-                        try {
-                          await download(`/certificates/${id}/download?format=zip&revision=${rev.id}`, undefined, {
-                            headers: { "X-Confirm-Private-Key": "yes" },
-                          });
-                        } catch (err) {
-                          toast.error(errorMessage(err));
-                        }
+                        requireStepUp(async (token) => {
+                          try {
+                            await download(`/certificates/${id}/download?format=zip&revision=${rev.id}`, undefined, {
+                              headers: { "X-Step-Up-Token": token },
+                            });
+                          } catch (err) {
+                            toast.error(errorMessage(err));
+                          }
+                        });
                       }}
                     >
                       ZIP
@@ -387,7 +411,7 @@ export function CertificateDetailPage() {
                 {deployments.items.map((d) => (
                   <tr key={d.id}>
                     <Td className="font-medium">{d.name}</Td>
-                    <Td>{d.type}</Td>
+                    <Td>{t(`deploy.types.${d.type}`, { defaultValue: d.type })}</Td>
                     <Td>
                       <Badge variant={d.enabled ? statusVariant(d.last_status ?? "ok") : "muted"}>
                         {d.enabled ? (d.last_status ?? "—") : t("common.disabled")}
@@ -457,13 +481,28 @@ export function CertificateDetailPage() {
         try {
           await download(`/certificates/${id}/download?format=pfx`, { password }, {
             method: "POST",
-            headers: { "X-Confirm-Private-Key": "yes" },
+            headers: { "X-Step-Up-Token": pfxToken.current },
           });
           setPfxOpen(false);
         } catch (err) {
           toast.error(errorMessage(err));
         }
       }} />
+
+      <StepUpDialog
+        open={stepUpOpen}
+        onOpenChange={setStepUpOpen}
+        onSubmit={async (password, totp) => {
+          const res = await request<{ step_up_token: string }>("/me/step-up", {
+            method: "POST",
+            body: { password, totp_code: totp || "" },
+          });
+          const action = stepUpAction;
+          setStepUpOpen(false);
+          setStepUpAction(null);
+          if (action) await action(res.step_up_token);
+        }}
+      />
 
       <DeploymentDialog open={deployOpen} onOpenChange={setDeployOpen} certId={id} onCreated={() => {
         setDeployOpen(false);
@@ -541,107 +580,54 @@ function PfxDialog({ open, onOpenChange, onSubmit }: { open: boolean; onOpenChan
   );
 }
 
-function DeploymentDialog({
+function StepUpDialog({
   open,
   onOpenChange,
-  certId,
-  onCreated,
+  onSubmit,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  certId: string;
-  onCreated: () => void;
+  onSubmit: (password: string, totp: string) => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const [type, setType] = React.useState<Deployment["type"]>("local_file");
-  const [name, setName] = React.useState("");
-  const [dir, setDir] = React.useState("");
-  const [target, setTarget] = React.useState("nginx");
-  const [url, setUrl] = React.useState("");
-  const [secret, setSecret] = React.useState("");
-  const [error, setError] = React.useState("");
+  const { user } = useAuth();
+  const [password, setPassword] = React.useState("");
+  const [totp, setTotp] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-
-  const submit = async () => {
-    let config: Record<string, unknown>;
-    if (type === "local_file") {
-      config = {
-        directory: dir,
-        cert_file: "cert.pem",
-        key_file: "privkey.pem",
-        chain_file: "chain.pem",
-        fullchain_file: "fullchain.pem",
-        mode: "0640",
-        backup: true,
-      };
-    } else if (type === "reload") {
-      config = { target };
-    } else {
-      config = { url, secret };
-    }
-    setBusy(true);
-    setError("");
-    try {
-      await request("/deployments", {
-        method: "POST",
-        body: { certificate_id: certId, name: name || type, type, config, enabled: true },
-      });
-      toast.success(t("deploy.created"));
-      onCreated();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t("deploy.add")}</DialogTitle>
+          <DialogTitle>{t("auth.stepUpTitle")}</DialogTitle>
+          <DialogDescription>{t("auth.stepUpHint")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          {error && <ErrorBox message={error} />}
-          <Field label={t("common.name")}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nginx-prod" />
+        <Field label={t("auth.password")}>
+          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+        </Field>
+        {user?.totp_enabled && (
+          <Field label={t("auth.totpCode")}>
+            <Input value={totp} onChange={(e) => setTotp(e.target.value)} inputMode="numeric" />
           </Field>
-          <Field label={t("common.type")}>
-            <Select value={type} onChange={(e) => setType(e.target.value as Deployment["type"])}>
-              <option value="local_file">{t("deploy.local")}</option>
-              <option value="reload">{t("deploy.reload")}</option>
-              <option value="webhook">{t("deploy.webhook")}</option>
-            </Select>
-          </Field>
-          {type === "local_file" && (
-            <Field label={t("deploy.directory")}>
-              <Input value={dir} onChange={(e) => setDir(e.target.value)} placeholder="/etc/nginx/certs" />
-            </Field>
-          )}
-          {type === "reload" && (
-            <Field label={t("deploy.target")}>
-              <Select value={target} onChange={(e) => setTarget(e.target.value)}>
-                <option value="nginx">nginx -s reload</option>
-                <option value="systemd-nginx">systemctl reload nginx</option>
-                <option value="systemd-apache">systemctl reload apache2</option>
-                <option value="apache">apachectl graceful</option>
-              </Select>
-            </Field>
-          )}
-          {type === "webhook" && (
-            <>
-              <Field label={t("deploy.url")}>
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/hook" />
-              </Field>
-              <Field label={t("deploy.secret")} hint={t("common.optional")}>
-                <Input value={secret} onChange={(e) => setSecret(e.target.value)} />
-              </Field>
-            </>
-          )}
-        </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
-          <Button onClick={submit} disabled={busy}>{t("common.save")}</Button>
+          <Button
+            disabled={busy || !password}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await onSubmit(password, totp);
+                setPassword("");
+                setTotp("");
+              } catch (err) {
+                toast.error(errorMessage(err));
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {t("auth.reauthenticate")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

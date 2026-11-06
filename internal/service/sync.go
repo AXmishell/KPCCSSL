@@ -24,6 +24,21 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if n > 0 {
 		slog.Warn("marked interrupted jobs after restart", "count", n)
 	}
+	recovered, err := s.Store.RecoverInterruptedCertificates(ctx, now)
+	if err != nil {
+		return err
+	}
+	for _, certID := range recovered {
+		s.AddEvent(ctx, certID, "recovered", "interrupted operation repaired after restart", "")
+	}
+	if len(recovered) > 0 {
+		slog.Warn("recovered certificates left in transitional states", "count", len(recovered))
+	}
+	if n, err := s.Store.RecoverWorkflowRuns(ctx, now-120); err != nil {
+		slog.Warn("workflow recovery failed", "error", err)
+	} else if n > 0 {
+		slog.Warn("re-queued interrupted workflow runs", "count", n)
+	}
 	// Remove leftover per-job credential directories.
 	tmp := filepath.Join(s.Cfg.DataDir, "tmp", "jobs")
 	if err := os.RemoveAll(tmp); err != nil {
@@ -72,7 +87,7 @@ func (s *Service) handleSync(ctx context.Context, j *store.Job, log io.Writer) e
 	if s.Cfg.FakeACME {
 		return nil
 	}
-	certs, err := s.Store.ListCertificates(ctx, "", "", 200, 0)
+	certs, err := s.Store.ListCertificates(ctx, "", "", 200, 0, "")
 	if err != nil {
 		return err
 	}
@@ -123,6 +138,8 @@ func (s *Scheduler) Run(ctx context.Context) {
 	s.Sweep(ctx)
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
+	workflows := time.NewTicker(time.Minute)
+	defer workflows.Stop()
 	cleanup := time.NewTicker(6 * time.Hour)
 	defer cleanup.Stop()
 	for {
@@ -131,15 +148,23 @@ func (s *Scheduler) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.Sweep(ctx)
+		case <-workflows.C:
+			s.Service.RunScheduledWorkflows(ctx)
 		case <-cleanup.C:
 			if _, err := s.Store.CleanupSessions(ctx, store.Now()); err != nil {
 				slog.Warn("session cleanup failed", "error", err)
 			}
-			if days := s.Service.Cfg.RetentionDays; days > 0 {
-				if n, err := s.Service.Logs.Cleanup(time.Now().AddDate(0, 0, -days)); err != nil {
+			if days := s.Service.SettingInt(ctx, "retention_days", s.Service.Cfg.RetentionDays); days > 0 {
+				cutoff := time.Now().AddDate(0, 0, -days)
+				if n, err := s.Service.Logs.Cleanup(cutoff); err != nil {
 					slog.Warn("log cleanup failed", "error", err)
 				} else if n > 0 {
 					slog.Info("removed old job logs", "count", n)
+				}
+				if n, err := s.Store.CleanupWorkflowRuns(ctx, cutoff.Unix()); err != nil {
+					slog.Warn("workflow run cleanup failed", "error", err)
+				} else if n > 0 {
+					slog.Info("removed old workflow runs", "count", n)
 				}
 			}
 			s.Service.Limiter.Cleanup()
@@ -173,6 +198,31 @@ func (s *Scheduler) Sweep(ctx context.Context) {
 		if created {
 			s.Service.AddEvent(ctx, c.ID, "renew_queued", "scheduled renewal queued", j.ID)
 		}
+	}
+	s.notifyExpiring(ctx)
+}
+
+// notifyExpiring sends one "expires soon" notice per current revision. The
+// notification delivery dedupe table prevents repeated messages.
+func (s *Scheduler) notifyExpiring(ctx context.Context) {
+	days := s.Service.SettingInt(ctx, "renewal_notice_days", 30)
+	if days <= 0 {
+		return
+	}
+	now := store.Now()
+	items, err := s.Store.ListExpiringCertificates(ctx, now, now+int64(days)*86400, 200)
+	if err != nil {
+		slog.Warn("expiry notice scan failed", "error", err)
+		return
+	}
+	for _, item := range items {
+		if item.NotAfter <= now {
+			continue
+		}
+		body := fmt.Sprintf("%s expires at %s", item.PrimaryDomain,
+			time.Unix(item.NotAfter, 0).UTC().Format(time.RFC3339))
+		s.Service.Notify(ctx, "certificate.expiring", "cert:"+item.ID+":"+item.RevisionID,
+			"Certificate expires soon", body)
 	}
 }
 

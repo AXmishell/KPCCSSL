@@ -97,6 +97,7 @@ type Revision struct {
 	KeyPath           string `json:"-"`
 	ChainPath         string `json:"-"`
 	FullchainPath     string `json:"-"`
+	ConfigHash        string `json:"-"`
 	IssuedAt          int64  `json:"issued_at"`
 	RevokedAt         *int64 `json:"revoked_at"`
 	RevokeReason      *int64 `json:"revoke_reason"`
@@ -165,6 +166,52 @@ type NotificationChannel struct {
 	Enabled    bool   `json:"enabled"`
 	CreatedAt  int64  `json:"created_at"`
 	UpdatedAt  int64  `json:"updated_at"`
+}
+
+// Workflow is a user-defined certificate pipeline.
+type Workflow struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	DefinitionJSON string `json:"-"`
+	Enabled        bool   `json:"enabled"`
+	TriggerType    string `json:"trigger_type"`
+	Schedule       string `json:"schedule"`
+	CreatedAt      int64  `json:"created_at"`
+	UpdatedAt      int64  `json:"updated_at"`
+}
+
+// WorkflowRun is one durable execution of a workflow snapshot.
+type WorkflowRun struct {
+	ID             string  `json:"id"`
+	WorkflowID     string  `json:"workflow_id"`
+	Status         string  `json:"status"`
+	TriggerType    string  `json:"trigger_type"`
+	DefinitionJSON string  `json:"-"`
+	Owner          string  `json:"-"`
+	Error          *string `json:"error"`
+	StartedAt      *int64  `json:"started_at"`
+	FinishedAt     *int64  `json:"finished_at"`
+	HeartbeatAt    *int64  `json:"heartbeat_at"`
+	CreatedAt      int64   `json:"created_at"`
+}
+
+// WorkflowStepRun is the durable state of one step in a workflow run.
+type WorkflowStepRun struct {
+	ID          string  `json:"id"`
+	RunID       string  `json:"run_id"`
+	StepID      string  `json:"step_id"`
+	Type        string  `json:"type"`
+	Name        string  `json:"name"`
+	Status      string  `json:"status"`
+	Attempts    int     `json:"attempts"`
+	JobIDsJSON  string  `json:"-"`
+	OutputJSON  string  `json:"output_json"`
+	Error       *string `json:"error"`
+	StartedAt   *int64  `json:"started_at"`
+	FinishedAt  *int64  `json:"finished_at"`
+	AvailableAt int64   `json:"available_at"`
+	CreatedAt   int64   `json:"created_at"`
 }
 
 type AuditLog struct {

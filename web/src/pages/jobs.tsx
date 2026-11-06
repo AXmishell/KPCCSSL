@@ -1,7 +1,10 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useJobs } from "@/api/queries";
+import { errorMessage, request } from "@/api/client";
 import { Badge, statusVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
@@ -21,6 +24,16 @@ export function JobsPage() {
   const { t, i18n } = useTranslation();
   const [status, setStatus] = React.useState("");
   const { data, isLoading } = useJobs({ status });
+  const qc = useQueryClient();
+  const act = async (id: string, action: "cancel" | "retry") => {
+    try {
+      await request(`/jobs/${id}/${action}`, { method: "POST", body: {} });
+      toast.success(action === "cancel" ? t("job.canceled") : t("job.retried"));
+      void qc.invalidateQueries({ queryKey: ["jobs"] });
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  };
 
   return (
     <div>
@@ -70,9 +83,21 @@ export function JobsPage() {
                 </Td>
                 <Td className="text-muted-foreground">{duration(job.started_at, job.finished_at)}</Td>
                 <Td className="text-right">
-                  <Button asChild variant="ghost" size="sm">
-                    <Link to={`/jobs/${job.id}`}>{t("common.details")}</Link>
-                  </Button>
+                  <div className="flex justify-end gap-1">
+                    {job.status === "queued" && (
+                      <Button variant="ghost" size="sm" onClick={() => void act(job.id, "cancel")}>
+                        {t("common.cancel")}
+                      </Button>
+                    )}
+                    {["failed", "interrupted", "canceled"].includes(job.status) && (
+                      <Button variant="ghost" size="sm" onClick={() => void act(job.id, "retry")}>
+                        {t("common.retry")}
+                      </Button>
+                    )}
+                    <Button asChild variant="ghost" size="sm">
+                      <Link to={`/jobs/${job.id}`}>{t("common.details")}</Link>
+                    </Button>
+                  </div>
                 </Td>
               </tr>
             ))}

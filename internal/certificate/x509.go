@@ -112,12 +112,21 @@ func publicKeysEqual(a, b any) bool {
 	return bytes.Equal(ab, bb)
 }
 
-// RenewalTime returns a renewal timestamp 30 days before NotAfter, clamped to
-// at least one day in the future for short-lived certificates.
-func RenewalTime(notAfter int64, now time.Time) int64 {
-	candidate := notAfter - 30*86400
+// RenewalTime returns the next renewal timestamp. It uses one third of the
+// actual lifetime (capped at 30 days) so short-lived certificates do not get
+// renewed far too early. The value is clamped to a sensible future point.
+func RenewalTime(notBefore, notAfter int64, now time.Time) int64 {
+	lifetime := notAfter - notBefore
+	window := lifetime / 3
+	if window > 30*86400 {
+		window = 30 * 86400
+	}
+	if window < 3600 {
+		window = 3600
+	}
+	candidate := notAfter - window
 	if candidate <= now.Unix() {
-		candidate = now.Unix() + 86400
+		candidate = now.Unix() + 3600
 	}
 	if candidate >= notAfter {
 		candidate = notAfter - 3600

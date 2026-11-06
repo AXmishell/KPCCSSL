@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
 import { ArrowLeft, ArrowRight, Check, Loader2 } from "lucide-react";
-import { useCA, useDNS, useDNSProviders } from "@/api/queries";
+import { useCA, useDNS, useDNSProviders, useInfo } from "@/api/queries";
 import { errorMessage, request } from "@/api/client";
 import type { CertInput, Certificate, ChallengeType } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -69,6 +69,8 @@ export function CertificateNewPage() {
   const { data: caData } = useCA();
   const { data: dnsData } = useDNS();
   const { data: providerData } = useDNSProviders();
+  const { data: info } = useInfo();
+  const appliedDefaultCA = React.useRef(false);
 
   const {
     register,
@@ -101,6 +103,13 @@ export function CertificateNewPage() {
   const values = watch();
   const challenge = values.challenge_type;
   const registrableCAs = (caData?.items ?? []).filter((c) => c.status !== "disabled");
+
+  React.useEffect(() => {
+    if (appliedDefaultCA.current || !info?.default_ca_id) return;
+    if (!registrableCAs.some((c) => c.id === info.default_ca_id)) return;
+    appliedDefaultCA.current = true;
+    setValue("ca_account_id", info.default_ca_id);
+  }, [info?.default_ca_id, registrableCAs, setValue]);
   const providerName = (id: string) => providerData?.items.find((p) => p.id === id)?.name ?? id;
 
   const submit = async (v: FormValues) => {

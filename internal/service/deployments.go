@@ -88,6 +88,27 @@ func (s *Service) DeleteDeployment(ctx context.Context, id string) error {
 	return s.Store.DeleteDeployment(ctx, id)
 }
 
+// TestDeployment validates a deployment configuration and checks
+// connectivity without changing the target.
+func (s *Service) TestDeployment(ctx context.Context, depType string, config json.RawMessage) error {
+	if strings.TrimSpace(depType) == "" {
+		return errors.New("type is required")
+	}
+	if len(config) == 0 {
+		return errors.New("config is required")
+	}
+	return s.Deployer.Test(ctx, depType, string(config))
+}
+
+// TestDeploymentByID checks a saved deployment target.
+func (s *Service) TestDeploymentByID(ctx context.Context, id string) error {
+	d, err := s.Store.GetDeployment(ctx, id)
+	if err != nil {
+		return err
+	}
+	return s.Deployer.TestStored(ctx, d)
+}
+
 // DeployNow enqueues deployment of the current revision.
 func (s *Service) DeployNow(ctx context.Context, certID, idem string) ([]*store.Job, error) {
 	c, err := s.Store.GetCertificate(ctx, certID)
@@ -111,6 +132,44 @@ func (s *Service) DeployNow(ctx context.Context, certID, idem string) ([]*store.
 			key = key + ":" + d.ID
 		}
 		j, _, err := s.Enqueue(ctx, "deploy", &certID, nil, map[string]string{"deployment_id": d.ID, "revision_id": *c.CurrentRevisionID}, key, 3)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, j)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no enabled deployment targets")
+	}
+	return out, nil
+}
+
+// DeployRevisionNow enqueues an explicit historical revision to every enabled
+// deployment target. It is used by workflow deploy steps.
+func (s *Service) DeployRevisionNow(ctx context.Context, certID, revisionID, idem string) ([]*store.Job, error) {
+	if _, err := s.Store.GetCertificate(ctx, certID); err != nil {
+		return nil, err
+	}
+	rev, err := s.Store.GetRevision(ctx, revisionID)
+	if err != nil {
+		return nil, err
+	}
+	if rev.CertificateID != certID {
+		return nil, errors.New("revision does not belong to certificate")
+	}
+	deps, err := s.Store.ListDeployments(ctx, certID)
+	if err != nil {
+		return nil, err
+	}
+	var out []*store.Job
+	for _, d := range deps {
+		if !d.Enabled {
+			continue
+		}
+		key := idem
+		if key != "" {
+			key = key + ":" + d.ID
+		}
+		j, _, err := s.Enqueue(ctx, "deploy", &certID, nil, map[string]string{"deployment_id": d.ID, "revision_id": rev.ID}, key, 3)
 		if err != nil {
 			return out, err
 		}

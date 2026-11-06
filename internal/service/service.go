@@ -33,6 +33,11 @@ import (
 var ErrUnauthorized = errors.New("invalid email or password")
 var ErrForbidden = errors.New("forbidden")
 
+// ConflictError is a business conflict that API handlers map to HTTP 409.
+type ConflictError struct{ Msg string }
+
+func (e *ConflictError) Error() string { return e.Msg }
+
 // Service is the application service container.
 type Service struct {
 	Cfg      *config.Config
@@ -50,6 +55,8 @@ type Service struct {
 
 	caPresetsOnce sync.Once
 	caPresets     []CAPreset
+	versionMu     sync.Mutex
+	acmeVersion   string
 }
 
 // New wires the service and registers job handlers.
@@ -80,6 +87,21 @@ func New(cfg *config.Config, st *store.Store, box *secret.Box, engine acme.Engin
 
 // SetupTokenLogValue returns the token for the startup log.
 func (s *Service) SetupTokenLogValue() string { return s.SetupToken }
+
+// ACMEVersion returns the acme.sh version, caching a successful result. A
+// failed probe is retried on the next call.
+func (s *Service) ACMEVersion(ctx context.Context) (string, error) {
+	s.versionMu.Lock()
+	defer s.versionMu.Unlock()
+	if s.acmeVersion != "" {
+		return s.acmeVersion, nil
+	}
+	v, err := s.Engine.Version(ctx)
+	if err == nil {
+		s.acmeVersion = v
+	}
+	return v, err
+}
 
 // NeedsSetup reports whether no user exists yet.
 func (s *Service) NeedsSetup(ctx context.Context) (bool, error) {
@@ -166,6 +188,7 @@ func (s *Service) Audit(ctx context.Context, actorID *string, action, resourceTy
 		entry.RequestID = &requestID
 	}
 	if detail != "" {
+		detail = job.Redact(detail)
 		entry.DetailJSON = &detail
 	}
 	if err := s.Store.InsertAudit(ctx, entry); err != nil {
@@ -224,6 +247,21 @@ func defaultMaxAttempts(jobType string) int {
 	}
 }
 
+// CancelJob cancels a queued job and repairs the certificate state if it was
+// waiting on that job.
+func (s *Service) CancelJob(ctx context.Context, id string) error {
+	if err := s.Store.CancelJob(ctx, id, store.Now()); err != nil {
+		return err
+	}
+	_, _ = s.Store.RecoverInterruptedCertificates(ctx, store.Now())
+	return nil
+}
+
+// RetryJob requeues a terminal job.
+func (s *Service) RetryJob(ctx context.Context, id string) error {
+	return s.Store.RetryJob(ctx, id, store.Now())
+}
+
 // AddEvent writes a certificate timeline entry.
 func (s *Service) AddEvent(ctx context.Context, certID, typ, msg, jobID string) {
 	if certID == "" {
@@ -242,14 +280,18 @@ func (s *Service) AddEvent(ctx context.Context, certID, typ, msg, jobID string) 
 	}
 }
 
-// Notify sends a lifecycle notification without failing the caller.
-func (s *Service) Notify(ctx context.Context, eventType, key, title, body string) {
+// Notify sends a lifecycle notification. Callers that treat notifications as
+// best-effort may ignore the returned error; workflow notify steps surface it so
+// continue_on_error can decide the flow.
+func (s *Service) Notify(ctx context.Context, eventType, key, title, body string) error {
 	if s.Notifier == nil {
-		return
+		return nil
 	}
 	if err := s.Notifier.Dispatch(ctx, notify.Event{Type: eventType, Key: key, Title: title, Body: body}); err != nil {
 		slog.Warn("notification failed", "event", eventType, "error", err)
+		return err
 	}
+	return nil
 }
 
 func validateEmail(email string) error {
@@ -286,7 +328,7 @@ func normalizeEmail(email string) string {
 func errorParts(err error) (string, string) {
 	var ae *acme.Error
 	if errors.As(err, &ae) {
-		return ae.Code, ae.Message
+		return ae.Code, job.Redact(ae.Message)
 	}
-	return acme.CodeUnknown, err.Error()
+	return acme.CodeUnknown, job.Redact(err.Error())
 }

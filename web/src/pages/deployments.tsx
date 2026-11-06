@@ -39,7 +39,7 @@ export function DeploymentsPage() {
             {data.items.map((d) => (
               <tr key={d.id}>
                 <Td className="font-medium">{d.name}</Td>
-                <Td>{d.type}</Td>
+                <Td>{t(`deploy.types.${d.type}`, { defaultValue: d.type })}</Td>
                 <Td>
                   <Link to={`/certificates/${d.certificate_id}`} className="text-primary hover:underline">
                     {d.certificate_id}

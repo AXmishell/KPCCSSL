@@ -9,8 +9,9 @@ import (
 )
 
 // ListCertificates filters and pages certificates. cursor is the created_at
-// of the last row from the previous page (descending order).
-func (s *Store) ListCertificates(ctx context.Context, status, search string, limit int, cursor int64) ([]Certificate, error) {
+// of the last row from the previous page; cursorID breaks ties within the same
+// second (descending order).
+func (s *Store) ListCertificates(ctx context.Context, status, search string, limit int, cursor int64, cursorID string) ([]Certificate, error) {
 	q := certCols + ` WHERE deleted_at IS NULL`
 	var args []any
 	if status != "" {
@@ -23,10 +24,15 @@ func (s *Store) ListCertificates(ctx context.Context, status, search string, lim
 		args = append(args, like, like)
 	}
 	if cursor > 0 {
-		q += ` AND created_at < ?`
-		args = append(args, cursor)
+		if cursorID == "" {
+			q += ` AND created_at < ?`
+			args = append(args, cursor)
+		} else {
+			q += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+			args = append(args, cursor, cursor, cursorID)
+		}
 	}
-	q += ` ORDER BY created_at DESC LIMIT ?`
+	q += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -47,6 +53,16 @@ func (s *Store) ListCertificates(ctx context.Context, status, search string, lim
 // GetCertificate returns a non-deleted certificate.
 func (s *Store) GetCertificate(ctx context.Context, id string) (*Certificate, error) {
 	return s.scanCert(s.db.QueryRowContext(ctx, certCols+` WHERE id=? AND deleted_at IS NULL`, id))
+}
+
+// CertificateDomainExists reports whether another live certificate already
+// uses the normalized primary domain. excludeID is ignored, which lets updates
+// keep their own domain.
+func (s *Store) CertificateDomainExists(ctx context.Context, domain, excludeID string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificates
+		WHERE primary_domain = ? AND deleted_at IS NULL AND id <> ?`, domain, excludeID).Scan(&n)
+	return n > 0, err
 }
 
 // CreateCertificate inserts a draft certificate.
@@ -121,6 +137,40 @@ func (s *Store) SoftDeleteCertificate(ctx context.Context, id string, now int64)
 	return nil
 }
 
+// RecoverInterruptedCertificates repairs certificates that were left in a
+// transitional state when the process died. Certificates with a current
+// revision go back to active; certificates without one fail so the user can
+// retry cleanly. Certificates that still have a queued job are left alone.
+func (s *Store) RecoverInterruptedCertificates(ctx context.Context, now int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `UPDATE certificates SET
+		status = CASE WHEN current_revision_id IS NOT NULL THEN 'active' ELSE 'failed' END,
+		last_error_code = 'E_INTERRUPTED',
+		last_error_message = CASE WHEN current_revision_id IS NOT NULL
+			THEN 'previous operation was interrupted by a restart; certificate remains active'
+			ELSE 'initial issuance was interrupted by a restart; retry when ready' END,
+		updated_at = ?, version = version + 1
+		WHERE deleted_at IS NULL
+		  AND status IN ('queued','issuing','renewing')
+		  AND NOT EXISTS (
+			SELECT 1 FROM jobs j
+			WHERE j.certificate_id = certificates.id AND j.status = 'queued'
+		  )
+		RETURNING id`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // DueForRenewal returns active certificates whose renewal window is due.
 func (s *Store) DueForRenewal(ctx context.Context, before int64, limit int) ([]Certificate, error) {
 	rows, err := s.db.QueryContext(ctx, certCols+` WHERE deleted_at IS NULL AND status='active' AND auto_renew=1 AND next_renew_at IS NOT NULL AND next_renew_at <= ? ORDER BY next_renew_at ASC LIMIT ?`, before, limit)
@@ -139,12 +189,48 @@ func (s *Store) DueForRenewal(ctx context.Context, before int64, limit int) ([]C
 	return out, rows.Err()
 }
 
+// ExpiringCertificate is the minimal projection needed for expiry notices.
+type ExpiringCertificate struct {
+	ID            string
+	PrimaryDomain string
+	RevisionID    string
+	NotAfter      int64
+}
+
+// ListExpiringCertificates returns active certificates whose current revision
+// expires between now and before. Results are deduplicated by revision.
+func (s *Store) ListExpiringCertificates(ctx context.Context, now, before int64, limit int) ([]ExpiringCertificate, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.primary_domain, r.id, r.not_after
+		FROM certificates c
+		JOIN certificate_revisions r ON r.id = c.current_revision_id
+		WHERE c.deleted_at IS NULL AND c.status = 'active'
+		  AND r.revoked_at IS NULL
+		  AND r.not_after > ? AND r.not_after <= ?
+		ORDER BY r.not_after ASC LIMIT ?`, now, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ExpiringCertificate{}
+	for rows.Next() {
+		var e ExpiringCertificate
+		if err := rows.Scan(&e.ID, &e.PrimaryDomain, &e.RevisionID, &e.NotAfter); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // CertificateStats returns dashboard counters.
 func (s *Store) CertificateStats(ctx context.Context) (total, expiring, failed, active int, err error) {
 	now := Now()
 	row := s.db.QueryRowContext(ctx, `SELECT
 		COUNT(*),
-		COALESCE(SUM(CASE WHEN status='active' AND next_renew_at IS NOT NULL AND next_renew_at <= ? THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN status='active' AND current_revision_id IS NOT NULL AND EXISTS (
+			SELECT 1 FROM certificate_revisions r
+			WHERE r.id = certificates.current_revision_id AND r.not_after <= ?
+		) THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0)
 		FROM certificates WHERE deleted_at IS NULL`, now+30*86400)
@@ -187,21 +273,48 @@ func (s *Store) scanCert(row interface{ Scan(...any) error }) (*Certificate, err
 // CreateRevision inserts an issued certificate revision.
 func (s *Store) CreateRevision(ctx context.Context, r *Revision) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO certificate_revisions
-		(id,certificate_id,serial,fingerprint_sha256,not_before,not_after,cert_path,key_path,chain_path,fullchain_path,issued_at,revoked_at,revoke_reason,created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		r.ID, r.CertificateID, r.Serial, r.FingerprintSHA256, r.NotBefore, r.NotAfter, r.CertPath, r.KeyPath, r.ChainPath, r.FullchainPath, r.IssuedAt, r.RevokedAt, r.RevokeReason, r.CreatedAt)
+		(id,certificate_id,serial,fingerprint_sha256,not_before,not_after,cert_path,key_path,chain_path,fullchain_path,config_hash,issued_at,revoked_at,revoke_reason,created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ID, r.CertificateID, r.Serial, r.FingerprintSHA256, r.NotBefore, r.NotAfter, r.CertPath, r.KeyPath, r.ChainPath, r.FullchainPath, r.ConfigHash, r.IssuedAt, r.RevokedAt, r.RevokeReason, r.CreatedAt)
 	return err
+}
+
+// ActivateRevision inserts a revision and makes it current in one transaction.
+func (s *Store) ActivateRevision(ctx context.Context, certificateID string, r *Revision, nextRenew, now int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO certificate_revisions
+		(id,certificate_id,serial,fingerprint_sha256,not_before,not_after,cert_path,key_path,chain_path,fullchain_path,config_hash,issued_at,revoked_at,revoke_reason,created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ID, r.CertificateID, r.Serial, r.FingerprintSHA256, r.NotBefore, r.NotAfter, r.CertPath, r.KeyPath, r.ChainPath, r.FullchainPath, r.ConfigHash, r.IssuedAt, r.RevokedAt, r.RevokeReason, r.CreatedAt); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE certificates SET status='active',current_revision_id=?,next_renew_at=?,last_error_code=NULL,last_error_message=NULL,updated_at=?,version=version+1 WHERE id=? AND deleted_at IS NULL`,
+		r.ID, nextRenew, now, certificateID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
 }
 
 // GetRevision returns one revision.
 func (s *Store) GetRevision(ctx context.Context, id string) (*Revision, error) {
 	var r Revision
 	var revoked, reason sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id,certificate_id,serial,fingerprint_sha256,not_before,not_after,cert_path,key_path,chain_path,fullchain_path,issued_at,revoked_at,revoke_reason,created_at FROM certificate_revisions WHERE id=?`, id).Scan(
-		&r.ID, &r.CertificateID, &r.Serial, &r.FingerprintSHA256, &r.NotBefore, &r.NotAfter, &r.CertPath, &r.KeyPath, &r.ChainPath, &r.FullchainPath, &r.IssuedAt, &revoked, &reason, &r.CreatedAt)
+	var configHash sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id,certificate_id,serial,fingerprint_sha256,not_before,not_after,cert_path,key_path,chain_path,fullchain_path,config_hash,issued_at,revoked_at,revoke_reason,created_at FROM certificate_revisions WHERE id=?`, id).Scan(
+		&r.ID, &r.CertificateID, &r.Serial, &r.FingerprintSHA256, &r.NotBefore, &r.NotAfter, &r.CertPath, &r.KeyPath, &r.ChainPath, &r.FullchainPath, &configHash, &r.IssuedAt, &revoked, &reason, &r.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
+	r.ConfigHash = configHash.String
 	if revoked.Valid {
 		r.RevokedAt = &revoked.Int64
 	}
@@ -213,7 +326,7 @@ func (s *Store) GetRevision(ctx context.Context, id string) (*Revision, error) {
 
 // ListRevisions returns revisions newest first.
 func (s *Store) ListRevisions(ctx context.Context, certID string) ([]Revision, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,certificate_id,serial,fingerprint_sha256,not_before,not_after,cert_path,key_path,chain_path,fullchain_path,issued_at,revoked_at,revoke_reason,created_at FROM certificate_revisions WHERE certificate_id=? ORDER BY issued_at DESC`, certID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,certificate_id,serial,fingerprint_sha256,not_before,not_after,cert_path,key_path,chain_path,fullchain_path,config_hash,issued_at,revoked_at,revoke_reason,created_at FROM certificate_revisions WHERE certificate_id=? ORDER BY issued_at DESC`, certID)
 	if err != nil {
 		return nil, err
 	}
@@ -222,9 +335,11 @@ func (s *Store) ListRevisions(ctx context.Context, certID string) ([]Revision, e
 	for rows.Next() {
 		var r Revision
 		var revoked, reason sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.CertificateID, &r.Serial, &r.FingerprintSHA256, &r.NotBefore, &r.NotAfter, &r.CertPath, &r.KeyPath, &r.ChainPath, &r.FullchainPath, &r.IssuedAt, &revoked, &reason, &r.CreatedAt); err != nil {
+		var configHash sql.NullString
+		if err := rows.Scan(&r.ID, &r.CertificateID, &r.Serial, &r.FingerprintSHA256, &r.NotBefore, &r.NotAfter, &r.CertPath, &r.KeyPath, &r.ChainPath, &r.FullchainPath, &configHash, &r.IssuedAt, &revoked, &reason, &r.CreatedAt); err != nil {
 			return nil, err
 		}
+		r.ConfigHash = configHash.String
 		if revoked.Valid {
 			r.RevokedAt = &revoked.Int64
 		}

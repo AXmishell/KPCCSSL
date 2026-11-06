@@ -26,11 +26,13 @@ func SupportedEvents() []string {
 		"*",
 		"certificate.issued",
 		"certificate.renewed",
+		"certificate.expiring",
 		"certificate.failed",
 		"certificate.renew_failed",
 		"certificate.revoked",
 		"ca.registered",
 		"deployment.failed",
+		"workflow.notify",
 	}
 }
 

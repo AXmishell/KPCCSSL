@@ -268,9 +268,18 @@ func TestEndToEndIssueFlow(t *testing.T) {
 		t.Fatalf("idempotency mismatch: %s vs %s", got, jobID1)
 	}
 
+	// Private-key downloads require a fresh step-up grant.
+	data = h.mustDo(t, "POST", "/me/step-up", map[string]string{"password": "correct-horse-battery-staple"}, h.csrf, http.StatusOK)
+	var stepUp struct {
+		Token string `json:"step_up_token"`
+	}
+	if err := json.Unmarshal(data, &stepUp); err != nil || stepUp.Token == "" {
+		t.Fatalf("step-up token missing: %s", data)
+	}
+
 	// Download ZIP and verify it contains the key material.
 	zipReq, _ := http.NewRequest("GET", h.server.URL+"/api/v1/certificates/"+cert.ID+"/download?format=zip", nil)
-	zipReq.Header.Set("X-Confirm-Private-Key", "yes")
+	zipReq.Header.Set("X-Step-Up-Token", stepUp.Token)
 	zipResp, err := h.client.Do(zipReq)
 	if err != nil {
 		t.Fatal(err)
@@ -316,6 +325,177 @@ func TestEndToEndIssueFlow(t *testing.T) {
 	data = h.mustDo(t, "GET", "/audit-logs", nil, "", http.StatusOK)
 	if !strings.Contains(string(data), "certificate.create") {
 		t.Fatalf("audit log missing create: %s", data)
+	}
+}
+
+func TestWorkflowApplyVerifyAndNotify(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	now := store.Now()
+	ca := &store.CAAccount{ID: "ca-workflow", Name: "CA", DirectoryURL: "https://ca", Status: "registered", KeyVersion: 1, TOSAcceptedAt: &now, CreatedAt: now, UpdatedAt: now}
+	if err := h.store.CreateCAAccount(context.Background(), ca); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := h.svc.CreateDNS(context.Background(), service.DNSInput{Name: "cf", Provider: "dns_cf", Config: map[string]string{"CF_Token": "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := h.svc.CreateCertificate(context.Background(), service.CertInput{
+		Name: "workflow", PrimaryDomain: "wf.example.com", KeyType: "ec-256", CAAccountID: ca.ID,
+		ChallengeType: "dns-01", DNSCredentialID: cred.ID, AutoRenew: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	definition := map[string]any{
+		"version": 1,
+		"steps": []map[string]any{
+			{"id": "apply", "type": "apply", "config": map[string]any{"certificate_id": cert.ID}},
+			{"id": "verify", "type": "verify", "config": map[string]any{"certificate_id": cert.ID, "min_days": 1}},
+			{"id": "notify", "type": "notify", "config": map[string]any{"title": "workflow done", "body": "run {{run_id}}"}},
+		},
+	}
+	data = h.mustDo(t, "POST", "/workflows", map[string]any{
+		"name": "WF", "enabled": true, "trigger_type": "manual", "definition": definition,
+	}, me.CSRF, http.StatusCreated)
+	var wf struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &wf)
+	data = h.mustDo(t, "POST", "/workflows/"+wf.ID+"/run", map[string]any{}, me.CSRF, http.StatusAccepted)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(data, &started)
+
+	wfRunner := service.NewWorkflowRunner(h.svc)
+	for i := 0; i < 20; i++ {
+		_, _ = wfRunner.RunOnce(context.Background())
+		h.drainJobs(t)
+	}
+	data = h.mustDo(t, "GET", "/workflow-runs/"+started.RunID, nil, "", http.StatusOK)
+	var detail struct {
+		Run struct {
+			Status string `json:"status"`
+		} `json:"run"`
+		Steps []struct {
+			StepID string `json:"step_id"`
+			Status string `json:"status"`
+		} `json:"steps"`
+	}
+	_ = json.Unmarshal(data, &detail)
+	if detail.Run.Status != "succeeded" {
+		t.Fatalf("workflow status = %s (%s)", detail.Run.Status, data)
+	}
+	if len(detail.Steps) != 3 {
+		t.Fatalf("steps = %+v", detail.Steps)
+	}
+	for _, st := range detail.Steps {
+		if st.Status != "succeeded" {
+			t.Fatalf("step %s = %s", st.StepID, st.Status)
+		}
+	}
+	issued, err := h.store.GetCertificate(context.Background(), cert.ID)
+	if err != nil || issued.Status != "active" || issued.CurrentRevisionID == nil {
+		t.Fatalf("certificate not active: %+v err=%v", issued, err)
+	}
+}
+
+func TestWorkflowGraphConnection(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	definition := map[string]any{
+		"version": 2,
+		"nodes": []map[string]any{
+			{"id": "start", "type": "wait", "name": "start", "config": map[string]any{"seconds": 1}, "position": map[string]any{"x": 10, "y": 10}},
+			{"id": "done", "type": "notify", "name": "done", "config": map[string]any{"title": "graph done"}, "position": map[string]any{"x": 240, "y": 10}},
+		},
+		"edges": []map[string]any{
+			{"id": "e1", "from": "start", "to": "done", "condition": "success"},
+		},
+	}
+	data = h.mustDo(t, "POST", "/workflows", map[string]any{
+		"name": "Graph WF", "enabled": true, "trigger_type": "manual", "definition": definition,
+	}, me.CSRF, http.StatusCreated)
+	var wf struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &wf)
+	data = h.mustDo(t, "POST", "/workflows/"+wf.ID+"/run", map[string]any{}, me.CSRF, http.StatusAccepted)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(data, &started)
+
+	wfRunner := service.NewWorkflowRunner(h.svc)
+	for i := 0; i < 20; i++ {
+		_, _ = wfRunner.RunOnce(context.Background())
+		h.drainJobs(t)
+		time.Sleep(100 * time.Millisecond)
+	}
+	data = h.mustDo(t, "GET", "/workflow-runs/"+started.RunID, nil, "", http.StatusOK)
+	var detail struct {
+		Run struct {
+			Status string `json:"status"`
+		} `json:"run"`
+		Steps []struct {
+			StepID string `json:"step_id"`
+			Status string `json:"status"`
+		} `json:"steps"`
+	}
+	_ = json.Unmarshal(data, &detail)
+	if detail.Run.Status != "succeeded" || len(detail.Steps) != 2 {
+		t.Fatalf("run=%s steps=%+v", detail.Run.Status, detail.Steps)
+	}
+	for _, st := range detail.Steps {
+		if st.Status != "succeeded" {
+			t.Fatalf("step %s = %s", st.StepID, st.Status)
+		}
+	}
+}
+
+func TestDeleteWorkflowRejectsActiveRun(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	definition := map[string]any{
+		"version": 2,
+		"nodes": []map[string]any{
+			{"id": "start", "type": "wait", "name": "start", "config": map[string]any{"seconds": 1}},
+		},
+	}
+	data = h.mustDo(t, "POST", "/workflows", map[string]any{
+		"name": "Delete guard", "trigger_type": "manual", "definition": definition,
+	}, me.CSRF, http.StatusCreated)
+	var wf struct {
+		ID      string `json:"id"`
+		Enabled bool   `json:"enabled"`
+	}
+	_ = json.Unmarshal(data, &wf)
+	if !wf.Enabled {
+		t.Fatal("workflow should default to enabled when enabled is omitted")
+	}
+	if _, err := h.svc.RunWorkflow(context.Background(), wf.ID); err != nil {
+		t.Fatal(err)
+	}
+	status, body := h.do(t, "DELETE", "/workflows/"+wf.ID, nil, me.CSRF)
+	if status != http.StatusConflict {
+		t.Fatalf("delete active workflow: status %d body %s", status, body)
 	}
 }
 

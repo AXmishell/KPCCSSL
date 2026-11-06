@@ -26,6 +26,21 @@ paths:
                   status: { type: string }
                   version: { type: string }
                   setup_required: { type: boolean }
+  /system/ready:
+    get:
+      security: []
+      operationId: ready
+      description: Readiness probe (database, data directory and acme.sh binary). Also exposes Prometheus text metrics at the unprefixed `/metrics` endpoint.
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "503": { $ref: "#/components/responses/Problem" }
   /setup:
     post:
       security: []
@@ -73,6 +88,121 @@ paths:
       operationId: me
       responses:
         "200": { $ref: "#/components/responses/AuthResult" }
+  /me/step-up:
+    post:
+      operationId: stepUp
+      description: Re-authenticate the current session for private-key downloads. Returns a short-lived, session-bound token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+                totp_code: { type: string }
+                recovery_code: { type: string }
+      responses:
+        "200":
+          description: Step-up grant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  step_up_token: { type: string }
+                  expires_in: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+  /me/password:
+    post:
+      operationId: changePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string }
+      responses:
+        "204": { description: Password changed }
+        "401": { $ref: "#/components/responses/Problem" }
+  /me/totp/setup:
+    post:
+      operationId: totpSetup
+      responses:
+        "200":
+          description: New TOTP secret and otpauth URI
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  uri: { type: string }
+  /me/totp/enable:
+    post:
+      operationId: totpEnable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secret, code, password]
+              properties:
+                secret: { type: string }
+                code: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Recovery codes (shown once)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recovery_codes:
+                    type: array
+                    items: { type: string }
+  /me/totp/disable:
+    post:
+      operationId: totpDisable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+                code: { type: string }
+      responses:
+        "204": { description: Disabled }
+  /dashboard:
+    get:
+      operationId: dashboard
+      responses:
+        "200":
+          description: Dashboard counters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificates:
+                    type: object
+                    additionalProperties: { type: integer }
+                  jobs:
+                    type: object
+                    additionalProperties: { type: integer }
+                  recent_jobs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Job" }
   /certificates:
     get:
       operationId: listCertificates
@@ -80,7 +210,7 @@ paths:
         - { name: status, in: query, schema: { type: string } }
         - { name: q, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, maximum: 200, default: 50 } }
-        - { name: cursor, in: query, schema: { type: integer } }
+        - { name: cursor, in: query, schema: { type: [string, integer] }, description: "Composite `<created_at>:<id>` cursor or legacy integer." }
       responses:
         "200":
           description: Certificates
@@ -92,7 +222,7 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/Certificate" }
-                  next_cursor: { type: [integer, "null"] }
+                  next_cursor: { type: [string, integer, "null"], description: "Composite `<created_at>:<id>` cursor (the legacy integer form is also accepted)." }
     post:
       operationId: createCertificate
       requestBody:
@@ -180,21 +310,40 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/Revision" }
+  /certificates/{id}/events:
+    get:
+      operationId: listCertificateEvents
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 500 } }
+      responses:
+        "200":
+          description: Certificate timeline
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/CertificateEvent" }
   /certificates/{id}/download:
     get:
       operationId: downloadCertificate
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: format, in: query, schema: { type: string, enum: [pem, zip] }, description: "ZIP contains the private key; requires operator role and X-Confirm-Private-Key: yes" }
+        - { name: format, in: query, schema: { type: string, enum: [pem, zip] }, description: "ZIP contains the private key and requires a step-up grant" }
         - { name: revision, in: query, schema: { type: string } }
-        - { name: key, in: query, schema: { type: boolean }, description: "Requires operator role and X-Confirm-Private-Key: yes" }
-        - { name: X-Confirm-Private-Key, in: header, schema: { type: string, enum: [yes] } }
+        - { name: key, in: query, schema: { type: boolean }, description: "Include the private key; requires a step-up grant" }
+        - $ref: "#/components/parameters/StepUpToken"
       responses:
         "200": { description: Binary file }
+        "428": { $ref: "#/components/responses/Problem" }
     post:
       operationId: exportPFX
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/StepUpToken"
       requestBody:
         required: true
         content:
@@ -207,6 +356,7 @@ paths:
                 revision: { type: string }
       responses:
         "200": { description: PKCS#12 file }
+        "428": { $ref: "#/components/responses/Problem" }
   /jobs:
     get:
       operationId: listJobs
@@ -249,6 +399,33 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+  /jobs/{id}/cancel:
+    post:
+      operationId: cancelJob
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Canceled }
+        "409": { $ref: "#/components/responses/Problem" }
+  /jobs/{id}/retry:
+    post:
+      operationId: retryJob
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Re-queued }
+        "409": { $ref: "#/components/responses/Problem" }
+  /jobs/{id}/log:
+    get:
+      operationId: downloadJobLog
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Raw job log (admin only)
+          content:
+            text/plain:
+              schema: { type: string }
   /ca-accounts:
     get:
       operationId: listCAAccounts
@@ -285,6 +462,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CAAccount" }
+  /ca-accounts/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateCAAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CAInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CAAccount" }
+    delete:
+      operationId: deleteCAAccount
+      responses:
+        "204": { description: Deleted }
+        "409": { $ref: "#/components/responses/Problem" }
   /ca-accounts/{id}/register:
     post:
       operationId: registerCAAccount
@@ -293,6 +491,28 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "202": { $ref: "#/components/responses/Accepted" }
+  /ca-accounts/{id}/disable:
+    post:
+      operationId: disableCAAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Disabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CAAccount" }
+  /ca-accounts/{id}/enable:
+    post:
+      operationId: enableCAAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Enabled (registration required again)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CAAccount" }
   /dns-providers:
     get:
       operationId: listDNSProviders
@@ -342,6 +562,47 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DNSCredential" }
+  /dns-credentials/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateDNSCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                provider: { type: string }
+                config:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DNSCredential" }
+    delete:
+      operationId: deleteDNSCredential
+      responses:
+        "204": { description: Deleted }
+        "409": { $ref: "#/components/responses/Problem" }
+  /dns-credentials/{id}/verify:
+    post:
+      operationId: verifyDNSCredential
+      description: Local decryption/field validation; not a live provider API call.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Verified
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DNSCredential" }
+        "422": { $ref: "#/components/responses/Problem" }
   /deployments:
     get:
       operationId: listDeployments
@@ -371,6 +632,50 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Deployment" }
+  /deployments/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateDeployment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deployment" }
+    delete:
+      operationId: deleteDeployment
+      responses:
+        "204": { description: Deleted }
+  /deployments/test:
+    post:
+      operationId: testDeploymentConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, config]
+              properties:
+                type: { type: string }
+                config: { type: object, additionalProperties: true }
+      responses:
+        "204": { description: Connection test succeeded }
+        "400": { $ref: "#/components/responses/Problem" }
+  /deployments/{id}/test:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: testDeployment
+      responses:
+        "204": { description: Connection test succeeded }
+        "400": { $ref: "#/components/responses/Problem" }
   /notification-channels:
     get:
       operationId: listNotificationChannels
@@ -388,6 +693,215 @@ paths:
                   events:
                     type: array
                     items: { type: string }
+  /notification-channels/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateNotificationChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                type: { type: string }
+                config: { type: object, additionalProperties: true }
+                events:
+                  type: array
+                  items: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationChannel" }
+    delete:
+      operationId: deleteNotificationChannel
+      responses:
+        "204": { description: Deleted }
+  /notification-channels/{id}/test:
+    post:
+      operationId: testNotificationChannel
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Test message sent }
+        "502": { $ref: "#/components/responses/Problem" }
+  /users:
+    get:
+      operationId: listUsers
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+    post:
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, role]
+              properties:
+                email: { type: string }
+                password: { type: string }
+                role: { type: string, enum: [admin, operator, viewer] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+  /users/{id}:
+    patch:
+      operationId: updateUser
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [admin, operator, viewer] }
+                disabled: { type: boolean }
+                password: { type: string }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+  /workflows:
+    get:
+      operationId: listWorkflows
+      responses:
+        "200":
+          description: Workflow definitions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Workflow" }
+    post:
+      operationId: createWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkflowInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /workflows/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getWorkflow
+      responses:
+        "200":
+          description: Workflow
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+    patch:
+      operationId: updateWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkflowInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+    delete:
+      operationId: deleteWorkflow
+      responses:
+        "204": { description: Deleted }
+  /workflows/{id}/run:
+    post:
+      operationId: runWorkflow
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "202":
+          description: Workflow queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string }
+        "409": { $ref: "#/components/responses/Problem" }
+  /workflows/{id}/runs:
+    get:
+      operationId: listWorkflowRuns
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200 } }
+      responses:
+        "200":
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkflowRun" }
+  /workflow-runs/{id}:
+    get:
+      operationId: getWorkflowRun
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Run with step timeline
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowRunDetail" }
+  /workflow-runs/{id}/cancel:
+    post:
+      operationId: cancelWorkflowRun
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Canceled }
+        "409": { $ref: "#/components/responses/Problem" }
+  /workflow-runs/{id}/log:
+    get:
+      operationId: downloadWorkflowLog
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Workflow run log
+          content:
+            text/plain:
+              schema: { type: string }
   /audit-logs:
     get:
       operationId: listAuditLogs
@@ -448,6 +962,10 @@ paths:
                   disk_free_bytes: { type: integer }
                   server_time: { type: integer }
                   fake_acme: { type: boolean }
+                  instance_name: { type: string }
+                  default_ca_id: { type: string }
+                  default_theme: { type: string, enum: [light, dark] }
+                  renewal_notice_days: { type: integer }
 components:
   securitySchemes:
     sessionCookie:
@@ -459,6 +977,11 @@ components:
       name: Idempotency-Key
       in: header
       schema: { type: string, maxLength: 128 }
+    StepUpToken:
+      name: X-Step-Up-Token
+      in: header
+      description: Short-lived token returned by POST /me/step-up.
+      schema: { type: string }
   responses:
     AuthResult:
       description: Authenticated user and CSRF token
@@ -544,8 +1067,25 @@ components:
         challenge_type: { type: string }
         dns_credential_id: { type: string }
         webroot: { type: string }
+        options:
+          type: object
+          properties:
+            preferred_chain: { type: string }
+            dns_alias: { type: string }
+            dns_sleep: { type: integer }
+            always_new_key: { type: boolean }
+            must_staple: { type: boolean }
         auto_renew: { type: boolean }
         version: { type: integer }
+    CertificateEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        certificate_id: { type: string }
+        type: { type: string }
+        message: { type: [string, "null"] }
+        job_id: { type: [string, "null"] }
+        created_at: { type: integer }
     Revision:
       type: object
       properties:
@@ -627,7 +1167,21 @@ components:
         id: { type: string }
         certificate_id: { type: string }
         name: { type: string }
-        type: { type: string, enum: [local_file, reload, webhook] }
+        type:
+          type: string
+          enum:
+            - local_file
+            - reload
+            - webhook
+            - ssh
+            - baota_panel
+            - baota_site
+            - 1panel_panel
+            - 1panel_site
+            - tencent_cdn
+            - tencent_waf
+            - aliyun_cdn
+            - aliyun_waf
         enabled: { type: boolean }
         last_run_at: { type: [integer, "null"] }
         last_status: { type: [string, "null"] }
@@ -637,7 +1191,21 @@ components:
       properties:
         certificate_id: { type: string }
         name: { type: string }
-        type: { type: string, enum: [local_file, reload, webhook] }
+        type:
+          type: string
+          enum:
+            - local_file
+            - reload
+            - webhook
+            - ssh
+            - baota_panel
+            - baota_site
+            - 1panel_panel
+            - 1panel_site
+            - tencent_cdn
+            - tencent_waf
+            - aliyun_cdn
+            - aliyun_waf
         config: { type: object, additionalProperties: true }
         enabled: { type: boolean }
     NotificationChannel:
@@ -650,6 +1218,123 @@ components:
           type: array
           items: { type: string }
         enabled: { type: boolean }
+    WorkflowStep:
+      type: object
+      required: [id, type]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [apply, deploy, notify, verify, wait] }
+        name: { type: string }
+        config: { type: object, additionalProperties: true }
+        when: { type: string, enum: [success, failure, always] }
+        parallel_group: { type: string }
+        continue_on_error: { type: boolean }
+    WorkflowPosition:
+      type: object
+      properties:
+        x: { type: number }
+        y: { type: number }
+    WorkflowNode:
+      type: object
+      required: [id, type]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [apply, deploy, notify, verify, wait] }
+        name: { type: string }
+        config: { type: object, additionalProperties: true }
+        position: { $ref: "#/components/schemas/WorkflowPosition" }
+        continue_on_error: { type: boolean }
+    WorkflowEdge:
+      type: object
+      required: [from, to]
+      properties:
+        id: { type: string }
+        from: { type: string }
+        to: { type: string }
+        condition: { type: string, enum: [success, failure, always] }
+    WorkflowDefinition:
+      type: object
+      properties:
+        version: { type: integer }
+        steps:
+          type: array
+          description: Legacy v1 ordered steps.
+          items: { $ref: "#/components/schemas/WorkflowStep" }
+        nodes:
+          type: array
+          description: v2 graph nodes.
+          items: { $ref: "#/components/schemas/WorkflowNode" }
+        edges:
+          type: array
+          description: v2 graph edges.
+          items: { $ref: "#/components/schemas/WorkflowEdge" }
+        allow_multiple_starts:
+          type: boolean
+          description: Allow more than one root node. False by default so an unconnected node cannot become an accidental start node.
+    WorkflowInput:
+      type: object
+      required: [name, definition]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        enabled:
+          type: boolean
+          description: Defaults to true on create; omitted on update preserves the current value.
+        trigger_type: { type: string, enum: [manual, schedule] }
+        schedule: { type: string }
+        definition: { $ref: "#/components/schemas/WorkflowDefinition" }
+    Workflow:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        definition: { $ref: "#/components/schemas/WorkflowDefinition" }
+        enabled: { type: boolean }
+        trigger_type: { type: string, enum: [manual, schedule] }
+        schedule: { type: string }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+        last_run: { $ref: "#/components/schemas/WorkflowRun" }
+    WorkflowRun:
+      type: object
+      properties:
+        id: { type: string }
+        workflow_id: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, failed, partial, canceled] }
+        trigger_type: { type: string }
+        error: { type: [string, "null"] }
+        started_at: { type: [integer, "null"] }
+        finished_at: { type: [integer, "null"] }
+        created_at: { type: integer }
+    WorkflowStepRun:
+      type: object
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        step_id: { type: string }
+        type: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [pending, running, succeeded, failed, skipped, canceled] }
+        attempts: { type: integer }
+        job_ids:
+          type: array
+          items: { type: string }
+        output: { type: object, additionalProperties: true }
+        error: { type: [string, "null"] }
+        started_at: { type: [integer, "null"] }
+        finished_at: { type: [integer, "null"] }
+        available_at:
+          type: integer
+          description: Unix time after which a pending step may be retried.
+    WorkflowRunDetail:
+      type: object
+      properties:
+        run: { $ref: "#/components/schemas/WorkflowRun" }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/WorkflowStepRun" }
+        log_url: { type: string }
     AuditLog:
       type: object
       properties:

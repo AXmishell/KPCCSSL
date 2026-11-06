@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,9 +42,89 @@ func TestUsersAndAudit(t *testing.T) {
 	if err := st.InsertAudit(ctx, &AuditLog{ID: "a1", Action: "test", ResourceType: "x", Result: "ok", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	logs, err := st.ListAudit(ctx, 10, 0)
+	logs, err := st.ListAudit(ctx, 10, 0, "")
 	if err != nil || len(logs) != 1 {
 		t.Fatalf("logs=%v err=%v", logs, err)
+	}
+}
+
+func TestWorkflowRunQueriesAndJobCancellation(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	w := &Workflow{ID: "w1", Name: "wf", DefinitionJSON: `{"version":2,"nodes":[]}`, Enabled: true, TriggerType: "manual", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateWorkflow(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	run := &WorkflowRun{ID: "r1", WorkflowID: w.ID, Status: "queued", TriggerType: "manual", DefinitionJSON: w.DefinitionJSON, CreatedAt: now}
+	if err := st.CreateWorkflowRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := st.ActiveWorkflowRun(ctx, w.ID); err != nil || !active {
+		t.Fatalf("active=%v err=%v", active, err)
+	}
+	if recent, err := st.RecentWorkflowRun(ctx, w.ID, "schedule", now-60); err != nil || recent {
+		t.Fatalf("manual run counted as schedule: recent=%v err=%v", recent, err)
+	}
+	if recent, err := st.RecentWorkflowRun(ctx, w.ID, "manual", now-60); err != nil || !recent {
+		t.Fatalf("manual run not found: recent=%v err=%v", recent, err)
+	}
+	if latest, err := st.LatestWorkflowRuns(ctx); err != nil || latest[w.ID] == nil || latest[w.ID].ID != run.ID {
+		t.Fatalf("latest=%v err=%v", latest, err)
+	}
+
+	for i, key := range []string{"workflow:r1:a", "workflow:r1:b", "workflow:r2:a"} {
+		k := key
+		j := &Job{ID: fmt.Sprintf("job-%d", i), Type: "deploy", Status: "queued", CreatedAt: now, AvailableAt: now, IdempotencyKey: &k}
+		if _, err := st.CreateJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := st.CancelJobsByPrefix(ctx, "workflow:r1:", "", now)
+	if err != nil || n != 2 {
+		t.Fatalf("canceled=%d err=%v", n, err)
+	}
+	j, err := st.GetJob(ctx, "job-0")
+	if err != nil || j.Status != "canceled" {
+		t.Fatalf("job-0=%+v err=%v", j, err)
+	}
+	if j, err := st.GetJob(ctx, "job-2"); err != nil || j.Status != "queued" {
+		t.Fatalf("unrelated job canceled: %+v err=%v", j, err)
+	}
+}
+
+func TestWorkflowStepRetryAvailability(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	w := &Workflow{ID: "w-retry", Name: "wf", DefinitionJSON: `{"version":2,"nodes":[]}`, Enabled: true, TriggerType: "manual", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateWorkflow(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateWorkflowRun(ctx, &WorkflowRun{ID: "r-retry", WorkflowID: w.ID, Status: "queued", TriggerType: "manual", DefinitionJSON: w.DefinitionJSON, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	step := &WorkflowStepRun{ID: "s-retry", RunID: "r-retry", StepID: "s", Type: "wait", Name: "s", Status: "pending", CreatedAt: now}
+	if err := st.CreateStepRun(ctx, step); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartStepRun(ctx, step.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	msg := "another operation is in progress"
+	if err := st.RetryStepRun(ctx, step.ID, now+60, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartStepRun(ctx, step.ID, now); err != ErrConflict {
+		t.Fatalf("early start = %v, want ErrConflict", err)
+	}
+	if err := st.StartStepRun(ctx, step.ID, now+61); err != nil {
+		t.Fatalf("retry start: %v", err)
+	}
+	got, err := st.GetStepRun(ctx, "r-retry", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Attempts != 2 || got.Status != "running" {
+		t.Fatalf("step = %+v", got)
 	}
 }
 
@@ -120,6 +202,102 @@ func TestJobClaimAndRetry(t *testing.T) {
 	got, _ := st.GetJob(ctx, "j1")
 	if got.Status != "interrupted" {
 		t.Fatalf("status=%s", got.Status)
+	}
+}
+
+func TestCertificatePrimaryDomainUnique(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	ca := &CAAccount{ID: "ca1", Name: "CA", DirectoryURL: "https://ca/dir", Status: "registered", KeyVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCAAccount(ctx, ca); err != nil {
+		t.Fatal(err)
+	}
+	base := Certificate{Name: "one", PrimaryDomain: "example.com", SAN: []string{"example.com"}, KeyType: "ec-256", CAAccountID: "ca1", ChallengeType: "dns-01", Status: "draft", Version: 1, CreatedAt: now, UpdatedAt: now}
+	first := base
+	first.ID = "c1"
+	if err := st.CreateCertificate(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+	second := base
+	second.ID = "c2"
+	if err := st.CreateCertificate(ctx, &second); err == nil {
+		t.Fatal("duplicate primary domain was accepted")
+	} else if !strings.Contains(err.Error(), "primary domain already exists") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRecoverInterruptedCertificates(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	ca := &CAAccount{ID: "ca1", Name: "CA", DirectoryURL: "https://ca/dir", Status: "registered", KeyVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCAAccount(ctx, ca); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id, domain, status string) *Certificate {
+		c := &Certificate{ID: id, Name: id, PrimaryDomain: domain, SAN: []string{domain}, KeyType: "ec-256", CAAccountID: "ca1", ChallengeType: "dns-01", Status: status, Version: 1, CreatedAt: now, UpdatedAt: now}
+		if err := st.CreateCertificate(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	broken := mk("c1", "broken.example.com", "issuing")
+	active := mk("c2", "active.example.com", "renewing")
+	queued := mk("c3", "queued.example.com", "queued")
+
+	rev := &Revision{ID: "r1", CertificateID: active.ID, Serial: "aa", FingerprintSHA256: "bb", NotBefore: now, NotAfter: now + 86400,
+		CertPath: "/tmp/cert", KeyPath: "/tmp/key", ChainPath: "/tmp/chain", FullchainPath: "/tmp/full", IssuedAt: now, CreatedAt: now}
+	if err := st.ActivateRevision(ctx, active.ID, rev, now+3600, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetCertificateStatus(ctx, active.ID, "renewing", nil, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	// A queued job means the worker still owns the transition.
+	if _, err := st.CreateJob(ctx, &Job{ID: "j1", Type: "issue", CertificateID: &queued.ID, Status: "queued", MaxAttempts: 3, PayloadJSON: "{}", CreatedAt: now, AvailableAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := st.RecoverInterruptedCertificates(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("recovered %v", ids)
+	}
+	gotBroken, _ := st.GetCertificate(ctx, broken.ID)
+	if gotBroken.Status != "failed" {
+		t.Fatalf("broken status = %s", gotBroken.Status)
+	}
+	gotActive, _ := st.GetCertificate(ctx, active.ID)
+	if gotActive.Status != "active" {
+		t.Fatalf("active status = %s", gotActive.Status)
+	}
+	gotQueued, _ := st.GetCertificate(ctx, queued.ID)
+	if gotQueued.Status != "queued" {
+		t.Fatalf("queued status = %s", gotQueued.Status)
+	}
+}
+
+func TestActiveJobUniqueIndex(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	ca := &CAAccount{ID: "ca1", Name: "CA", DirectoryURL: "https://ca/dir", Status: "registered", KeyVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCAAccount(ctx, ca); err != nil {
+		t.Fatal(err)
+	}
+	c := &Certificate{ID: "c1", Name: "cert", PrimaryDomain: "example.com", SAN: []string{"example.com"}, KeyType: "ec-256", CAAccountID: "ca1", ChallengeType: "dns-01", Status: "draft", Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCertificate(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	j1 := &Job{ID: "j1", Type: "issue", CertificateID: &c.ID, Status: "queued", MaxAttempts: 3, PayloadJSON: "{}", CreatedAt: now, AvailableAt: now}
+	created, err := st.CreateJob(ctx, j1)
+	if err != nil || !created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	j2 := &Job{ID: "j2", Type: "issue", CertificateID: &c.ID, Status: "queued", MaxAttempts: 3, PayloadJSON: "{}", CreatedAt: now, AvailableAt: now}
+	created, err = st.CreateJob(ctx, j2)
+	if err != nil || created || j2.ID != "j1" {
+		t.Fatalf("created=%v err=%v id=%s", created, err, j2.ID)
 	}
 }
 

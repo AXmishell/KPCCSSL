@@ -19,6 +19,9 @@ import type {
   Revision,
   SystemInfo,
   User,
+  Workflow,
+  WorkflowRun,
+  WorkflowRunDetail,
 } from "./types";
 
 export const qk = {
@@ -37,6 +40,10 @@ export const qk = {
   settings: ["settings"] as const,
   info: ["system-info"] as const,
   dashboard: ["dashboard"] as const,
+  workflows: ["workflows"] as const,
+  workflow: (id: string) => ["workflow", id] as const,
+  workflowRuns: (id: string) => ["workflow-runs", id] as const,
+  workflowRun: (id: string) => ["workflow-run", id] as const,
 };
 
 export function useCA() {
@@ -59,11 +66,11 @@ export function useDNS() {
   return useQuery({ queryKey: qk.dns, queryFn: () => request<{ items: DNSCredential[] }>("/dns-credentials") });
 }
 
-export function useCertificates(params: { status?: string; q?: string }) {
+export function useCertificates(params: { status?: string; q?: string; limit?: number }) {
   const search = new URLSearchParams();
   if (params.status) search.set("status", params.status);
   if (params.q) search.set("q", params.q);
-  search.set("limit", "100");
+  search.set("limit", String(params.limit ?? 100));
   const key = search.toString();
   return useQuery({
     queryKey: qk.certs(key),
@@ -153,6 +160,51 @@ export function useInfo() {
 
 export function useUsers() {
   return useQuery({ queryKey: ["users"], queryFn: () => request<{ items: User[] }>("/users") });
+}
+
+export function useWorkflows() {
+  return useQuery({
+    queryKey: qk.workflows,
+    queryFn: () => request<{ items: Workflow[] }>("/workflows"),
+    // Poll quickly only while a run is active; otherwise keep the list fresh
+    // at a low rate so scheduled runs still appear.
+    refetchInterval: (query) =>
+      query.state.data?.items.some((w) => w.last_run && ["queued", "running"].includes(w.last_run.status))
+        ? 3000
+        : 15000,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useWorkflow(id?: string) {
+  return useQuery({
+    queryKey: qk.workflow(id ?? ""),
+    queryFn: () => request<Workflow>(`/workflows/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useWorkflowRuns(id?: string) {
+  return useQuery({
+    queryKey: qk.workflowRuns(id ?? ""),
+    queryFn: () => request<{ items: WorkflowRun[] }>(`/workflows/${id}/runs?limit=50`),
+    enabled: Boolean(id),
+    refetchInterval: (query) =>
+      query.state.data?.items.some((r) => ["queued", "running"].includes(r.status)) ? 2000 : 10000,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useWorkflowRun(id?: string) {
+  return useQuery({
+    queryKey: qk.workflowRun(id ?? ""),
+    queryFn: () => request<WorkflowRunDetail>(`/workflow-runs/${id}`),
+    enabled: Boolean(id),
+    refetchInterval: (query) => {
+      const status = query.state.data?.run.status;
+      return status && ["queued", "running"].includes(status) ? 1500 : false;
+    },
+  });
 }
 
 export function useDashboard() {

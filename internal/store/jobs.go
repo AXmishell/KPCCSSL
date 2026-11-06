@@ -24,6 +24,15 @@ func (s *Store) CreateJob(ctx context.Context, j *Job) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
+	// The partial unique index on (type, certificate_id) makes the
+	// find-then-insert race in Service.Enqueue harmless: the loser returns the
+	// job that the winner created.
+	if j.CertificateID != nil && j.Type != "deploy" && strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		if existing, getErr := s.FindActiveJob(ctx, j.Type, *j.CertificateID); getErr == nil {
+			*j = *existing
+			return false, nil
+		}
+	}
 	if j.IdempotencyKey == nil {
 		return false, err
 	}
@@ -118,6 +127,55 @@ func (s *Store) FinishJob(ctx context.Context, id, status string, code, msg *str
 func (s *Store) RequeueJob(ctx context.Context, id string, availableAt int64, code, msg *string, now int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='queued',available_at=?,error_code=?,error_message=?,started_at=?,finished_at=NULL,heartbeat_at=NULL WHERE id=?`, availableAt, code, msg, now, id)
 	return err
+}
+
+// CancelJobsByPrefix cancels every queued job whose idempotency key starts with
+// prefix. Running jobs are not interrupted because the worker does not expose a
+// cancel signal.
+func (s *Store) CancelJobsByPrefix(ctx context.Context, prefix, message string, now int64) (int64, error) {
+	if message == "" {
+		message = "canceled because the workflow run was canceled"
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE jobs
+		SET status='canceled',error_code='E_CANCELED',error_message=?,finished_at=?,heartbeat_at=?
+		WHERE status='queued' AND idempotency_key LIKE ? ESCAPE '\'`,
+		message, now, now, escapeLike(prefix)+"%")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// escapeLike escapes LIKE wildcards in a literal prefix.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// CancelJob cancels a queued job. Running jobs are not interrupted because the
+// worker does not expose a cancel signal; callers get ErrConflict instead.
+func (s *Store) CancelJob(ctx context.Context, id string, now int64) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='canceled',error_code='E_CANCELED',error_message='canceled by administrator',finished_at=?,heartbeat_at=? WHERE id=? AND status='queued'`, now, now, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
+// RetryJob requeues a terminal job immediately.
+func (s *Store) RetryJob(ctx context.Context, id string, now int64) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='queued',available_at=?,attempts=0,error_code=NULL,error_message=NULL,started_at=NULL,finished_at=NULL,heartbeat_at=NULL WHERE id=? AND status IN ('failed','interrupted','canceled')`, now, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrConflict
+	}
+	return nil
 }
 
 // InterruptRunning marks every running job as interrupted after a crash.

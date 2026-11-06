@@ -70,7 +70,8 @@ func New(st *store.Store, box *secret.Box) *Notifier {
 		Store: st,
 		Box:   box,
 		Client: &http.Client{
-			Timeout: 20 * time.Second,
+			Timeout:   20 * time.Second,
+			Transport: deploy.SafeTransport(),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return errors.New("redirects are not followed")
 			},
@@ -212,7 +213,7 @@ func (n *Notifier) sendWebhook(ctx context.Context, cfg WebhookConfig, ch *store
 	}
 	resp, err := n.Client.Do(req)
 	if err != nil {
-		return err
+		return httpError("webhook request failed", err)
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
@@ -234,7 +235,7 @@ func (n *Notifier) sendTelegram(ctx context.Context, cfg TelegramConfig, subject
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := n.Client.Do(req)
 	if err != nil {
-		return err
+		return httpError("telegram request failed", err)
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
@@ -242,6 +243,17 @@ func (n *Notifier) sendTelegram(ctx context.Context, cfg TelegramConfig, subject
 		return fmt.Errorf("telegram returned HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// httpError strips the request URL from transport errors. Telegram embeds the
+// bot token in its URL, so returning *url.Error verbatim would leak the token
+// into logs, audit rows and API responses.
+func httpError(prefix string, err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %v", prefix, ue.Err)
+	}
+	return fmt.Errorf("%s: %v", prefix, err)
 }
 
 func sendSMTP(ctx context.Context, cfg SMTPConfig, subject, body string) error {
@@ -269,10 +281,12 @@ func sendSMTP(ctx context.Context, cfg SMTPConfig, subject, body string) error {
 	}
 	defer c.Close()
 	if cfg.TLS == "starttls" {
-		if ok, _ := c.Extension("STARTTLS"); ok {
-			if err := c.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
-				return err
-			}
+		ok, _ := c.Extension("STARTTLS")
+		if !ok {
+			return errors.New("smtp server does not support STARTTLS")
+		}
+		if err := c.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
 		}
 	}
 	if cfg.Username != "" {

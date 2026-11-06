@@ -155,11 +155,14 @@ func (s *Service) UpdateCA(ctx context.Context, id string, in CAInput) (*store.C
 	if in.Name != "" {
 		a.Name = strings.TrimSpace(in.Name)
 	}
+	directoryChanged := false
 	if in.DirectoryURL != "" {
 		if err := s.validateDirectoryURL(in.DirectoryURL); err != nil {
 			return nil, err
 		}
-		a.DirectoryURL = strings.TrimSpace(in.DirectoryURL)
+		next := strings.TrimSpace(in.DirectoryURL)
+		directoryChanged = next != a.DirectoryURL
+		a.DirectoryURL = next
 	}
 	if in.TOSAccepted && a.TOSAcceptedAt == nil {
 		now := store.Now()
@@ -186,7 +189,48 @@ func (s *Service) UpdateCA(ctx context.Context, id string, in CAInput) (*store.C
 	if err := s.Store.UpdateCAAccount(ctx, a); err != nil {
 		return nil, err
 	}
+	if directoryChanged && a.Status != "disabled" {
+		if err := s.Store.SetCAStatus(ctx, a.ID, "new", nil, store.Now()); err != nil {
+			return nil, err
+		}
+		a.Status = "new"
+	}
 	return a, nil
+}
+
+// DeleteCA removes a CA account that is not referenced by a live certificate.
+func (s *Service) DeleteCA(ctx context.Context, id string) error {
+	n, err := s.Store.CountCertificatesUsingCA(ctx, id)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return &ConflictError{Msg: fmt.Sprintf("CA account is used by %d certificate(s)", n)}
+	}
+	return s.Store.DeleteCAAccount(ctx, id)
+}
+
+// SetCAEnabled disables a CA account or puts a disabled account back into the
+// "new" state so it must be registered again.
+func (s *Service) SetCAEnabled(ctx context.Context, id string, enabled bool) (*store.CAAccount, error) {
+	a, err := s.Store.GetCAAccount(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	status := a.Status
+	if enabled {
+		if status == "disabled" {
+			status = "new"
+		}
+	} else {
+		status = "disabled"
+	}
+	if status != a.Status {
+		if err := s.Store.SetCAStatus(ctx, id, status, nil, store.Now()); err != nil {
+			return nil, err
+		}
+	}
+	return s.Store.GetCAAccount(ctx, id)
 }
 
 // RegisterCA enqueues account registration.
@@ -316,7 +360,7 @@ func (s *Service) DeleteDNS(ctx context.Context, id string) error {
 		return err
 	}
 	if n > 0 {
-		return fmt.Errorf("credential is used by %d certificate(s)", n)
+		return &ConflictError{Msg: fmt.Sprintf("credential is used by %d certificate(s)", n)}
 	}
 	return s.Store.DeleteDNSCredential(ctx, id)
 }
@@ -332,6 +376,30 @@ func (s *Service) DecryptDNSConfig(d *store.DNSCredential) (map[string]string, e
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// VerifyDNS checks that a stored credential can be decrypted and still matches
+// the provider catalog. It is a local validation, not a live provider API call.
+func (s *Service) VerifyDNS(ctx context.Context, id string) (*store.DNSCredential, error) {
+	d, err := s.Store.GetDNSCredential(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := s.DecryptDNSConfig(d)
+	if err != nil {
+		msg := "cannot decrypt credential"
+		_ = s.Store.SetDNSCredentialHealth(ctx, d.ID, "error", &msg, nil, store.Now())
+		return nil, err
+	}
+	if err := s.DNS.ValidateConfig(d.Provider, cfg); err != nil {
+		msg := job.Redact(err.Error())
+		_ = s.Store.SetDNSCredentialHealth(ctx, d.ID, "error", &msg, nil, store.Now())
+		return nil, err
+	}
+	if err := s.Store.SetDNSCredentialHealth(ctx, d.ID, "ok", nil, nil, store.Now()); err != nil {
+		return nil, err
+	}
+	return s.Store.GetDNSCredential(ctx, id)
 }
 
 // TestNotification sends a test message through a channel.

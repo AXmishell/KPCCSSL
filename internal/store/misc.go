@@ -123,15 +123,20 @@ func (s *Store) InsertAudit(ctx context.Context, a *AuditLog) error {
 	return err
 }
 
-// ListAudit returns audit entries newest first with created_at cursor.
-func (s *Store) ListAudit(ctx context.Context, limit int, cursor int64) ([]AuditLog, error) {
+// ListAudit returns audit entries newest first with a composite cursor.
+func (s *Store) ListAudit(ctx context.Context, limit int, cursor int64, cursorID string) ([]AuditLog, error) {
 	q := `SELECT id,actor_id,action,resource_type,resource_id,ip,user_agent,request_id,result,detail_json,created_at FROM audit_logs`
 	var args []any
 	if cursor > 0 {
-		q += ` WHERE created_at < ?`
-		args = append(args, cursor)
+		if cursorID == "" {
+			q += ` WHERE created_at < ?`
+			args = append(args, cursor)
+		} else {
+			q += ` WHERE (created_at < ? OR (created_at = ? AND id < ?))`
+			args = append(args, cursor, cursor, cursorID)
+		}
 	}
-	q += ` ORDER BY created_at DESC LIMIT ?`
+	q += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

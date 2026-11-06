@@ -8,6 +8,7 @@ kpccssl worker          仅运行任务与续期调度
 kpccssl migrate         应用数据库迁移
 kpccssl doctor          检查运行环境
 kpccssl admin reset-password --email <email>
+kpccssl admin rotate-key
 kpccssl version
 ```
 
@@ -30,6 +31,7 @@ kpccssl admin reset-password --email admin@example.com
 - 不带子命令时等价于 `serve`。
 - `migrate --down` 被有意禁用；回滚请恢复数据库备份。
 - 启动时自动执行向前迁移。
+- `admin rotate-key` 向 keyring 追加新版本并设为当前版本；旧版本保留，已有密文仍可解密。升级前请备份 `master.key`。
 
 ## `make`
 

@@ -86,6 +86,7 @@ Usage:
   kpccssl migrate [--down] Apply or roll back database migrations
   kpccssl doctor           Check runtime prerequisites
   kpccssl admin reset-password --email <email>
+  kpccssl admin rotate-key
   kpccssl version
 
 Config:
@@ -213,6 +214,7 @@ func runServe(cmd string, args []string) error {
 	for i := 0; i < cfg.JobConcurrency; i++ {
 		go a.runner.Run(ctx)
 	}
+	go service.NewWorkflowRunner(a.svc).Run(ctx)
 	sched := &service.Scheduler{Service: a.svc, Store: a.store}
 	go sched.Run(ctx)
 
@@ -422,8 +424,29 @@ func checkFileMode(path string, forbidden os.FileMode) error {
 }
 
 func runAdmin(args []string) error {
-	if len(args) == 0 || args[0] != "reset-password" {
-		return errors.New("usage: kpccssl admin reset-password [--email <email>]")
+	if len(args) == 0 {
+		return errors.New("usage: kpccssl admin reset-password [--email <email>] | rotate-key")
+	}
+	switch args[0] {
+	case "rotate-key":
+		fs := flag.NewFlagSet("rotate-key", flag.ExitOnError)
+		configPath := fs.String("config", "", "path to the YAML config file")
+		_ = fs.Parse(args[1:])
+		cfg, err := loadConfig(*configPath)
+		if err != nil {
+			return err
+		}
+		version, err := secret.RotateFile(cfg.MasterKeyFile)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("master key rotated: v%d is now current (old versions retained)\n", version)
+		fmt.Println("back up the keyring file before the next restart")
+		return nil
+	case "reset-password":
+		// handled below
+	default:
+		return errors.New("usage: kpccssl admin reset-password [--email <email>] | rotate-key")
 	}
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
 	email := fs.String("email", "", "user email")

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -21,20 +22,22 @@ type Box struct {
 	current int
 }
 
-// LoadOrCreate reads a 32-byte key from path, generating it with mode 0600
-// when missing. An explicit key (base64 or 64 hex chars) takes precedence only
-// when the file does not exist yet.
+// LoadOrCreate reads a keyring from path, generating a v1 key with mode 0600
+// when missing. A single base64/hex value is accepted for backwards
+// compatibility with older installations. An explicit key takes precedence
+// only when the file does not exist yet.
 func LoadOrCreate(path, provided string) (*Box, error) {
-	var key []byte
 	raw, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		key, err = decodeKey(strings.TrimSpace(string(raw)))
-		if err != nil {
-			return nil, fmt.Errorf("master key %s: %w", path, err)
+		keys, current, parseErr := parseKeyring(string(raw))
+		if parseErr != nil {
+			return nil, fmt.Errorf("master key %s: %w", path, parseErr)
 		}
 		_ = os.Chmod(path, 0o600)
+		return New(keys, current)
 	case errors.Is(err, os.ErrNotExist):
+		var key []byte
 		if provided != "" {
 			key, err = decodeKey(provided)
 			if err != nil {
@@ -46,19 +49,135 @@ func LoadOrCreate(path, provided string) (*Box, error) {
 				return nil, fmt.Errorf("generate master key: %w", err)
 			}
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		if len(key) != 32 {
+			return nil, fmt.Errorf("master key must be 32 bytes, got %d", len(key))
+		}
+		if err := writeKeyring(path, map[int][]byte{1: key}); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(key)), 0o600); err != nil {
-			return nil, fmt.Errorf("write master key: %w", err)
-		}
+		return New(map[int][]byte{1: key}, 1)
 	default:
 		return nil, fmt.Errorf("read master key: %w", err)
 	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("master key must be 32 bytes, got %d", len(key))
+}
+
+// RotateFile adds a new key version to the keyring and makes it current. Old
+// keys are retained so existing ciphertext remains decryptable; records are
+// re-encrypted lazily on their next write.
+func RotateFile(path string) (int, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("read master key: %w", err)
 	}
-	return &Box{keys: map[int][]byte{1: key}, current: 1}, nil
+	keys, current, err := parseKeyring(string(raw))
+	if err != nil {
+		return 0, err
+	}
+	next := current + 1
+	for keys[next] != nil {
+		next++
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return 0, err
+	}
+	keys[next] = key
+	if err := writeKeyring(path, keys); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+func parseKeyring(raw string) (map[int][]byte, int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, 0, errors.New("master key file is empty")
+	}
+	keys := map[int][]byte{}
+	current := 0
+	if looksLikeKeyring(raw) {
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			versionRaw, value, ok := strings.Cut(line, "=")
+			if !ok || !strings.HasPrefix(versionRaw, "v") {
+				return nil, 0, errors.New("invalid keyring line")
+			}
+			version, err := strconv.Atoi(strings.TrimPrefix(versionRaw, "v"))
+			if err != nil || version < 1 {
+				return nil, 0, errors.New("invalid key version")
+			}
+			key, err := decodeKey(value)
+			if err != nil {
+				return nil, 0, err
+			}
+			if len(key) != 32 {
+				return nil, 0, fmt.Errorf("key v%d must be 32 bytes", version)
+			}
+			keys[version] = key
+			if version > current {
+				current = version
+			}
+		}
+		if current == 0 {
+			return nil, 0, errors.New("keyring contains no keys")
+		}
+		return keys, current, nil
+	}
+	key, err := decodeKey(raw)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(key) != 32 {
+		return nil, 0, fmt.Errorf("master key must be 32 bytes, got %d", len(key))
+	}
+	return map[int][]byte{1: key}, 1, nil
+}
+
+// looksLikeKeyring avoids mistaking a legacy base64 key (which may end in '=')
+// for the multi-line vN=value format.
+func looksLikeKeyring(raw string) bool {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if len(line) < 3 || line[0] != 'v' {
+			return false
+		}
+		i := 1
+		for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+			i++
+		}
+		return i > 1 && i < len(line) && line[i] == '='
+	}
+	return false
+}
+
+func writeKeyring(path string, keys map[int][]byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	versions := make([]int, 0, len(keys))
+	for v := range keys {
+		versions = append(versions, v)
+	}
+	sort.Ints(versions)
+	var b strings.Builder
+	for _, v := range versions {
+		b.WriteString("v")
+		b.WriteString(strconv.Itoa(v))
+		b.WriteString("=")
+		b.WriteString(base64.StdEncoding.EncodeToString(keys[v]))
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return fmt.Errorf("write master key: %w", err)
+	}
+	_ = os.Chmod(path, 0o600)
+	return nil
 }
 
 // New builds a Box from raw keys, keyed by version.

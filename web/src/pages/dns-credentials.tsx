@@ -81,6 +81,21 @@ export function DNSCredentialsPage() {
                   {isAdmin && (
                     <div className="flex justify-end gap-1">
                       <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            await request(`/dns-credentials/${d.id}/verify`, { method: "POST", body: {} });
+                            toast.success(t("dns.verified"));
+                            void qc.invalidateQueries();
+                          } catch (err) {
+                            toast.error(errorMessage(err));
+                          }
+                        }}
+                      >
+                        {t("dns.verify")}
+                      </Button>
+                      <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => {

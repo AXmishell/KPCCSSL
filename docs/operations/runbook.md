@@ -116,6 +116,8 @@ acme.sh 升级只能通过新镜像并跑契约测试；禁止在运行中执行
 kpccssl doctor                 # 目录权限、DB、acme.sh 版本、账号配置残留
 kpccssl admin reset-password --email admin@example.com
 curl -s http://127.0.0.1:8080/api/v1/system/health
+curl -s http://127.0.0.1:8080/api/v1/system/ready   # DB / data dir / acme.sh readiness
+curl -s http://127.0.0.1:8080/metrics              # Prometheus text metrics
 ```
 
 `doctor` 检查：

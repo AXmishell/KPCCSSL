@@ -60,6 +60,38 @@ func (s *Server) updateCA(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a)
 }
 
+func (s *Server) deleteCA(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.Svc.DeleteCA(r.Context(), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "ca.delete", "ca_account", id, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) disableCA(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	a, err := s.Svc.SetCAEnabled(r.Context(), id, false)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "ca.disable", "ca_account", id, "ok", "")
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *Server) enableCA(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	a, err := s.Svc.SetCAEnabled(r.Context(), id, true)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "ca.enable", "ca_account", id, "ok", "")
+	writeJSON(w, http.StatusOK, a)
+}
+
 func (s *Server) registerCA(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	j, err := s.Svc.RegisterCA(r.Context(), id, idempotencyKey(r))
@@ -150,17 +182,30 @@ func (s *Server) deleteDNS(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) verifyDNS(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	d, err := s.Svc.VerifyDNS(r.Context(), id)
+	if err != nil {
+		s.audit(r, "dns.verify", "dns_credential", id, "error", err.Error())
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "dns.verify", "dns_credential", id, "ok", "")
+	writeJSON(w, http.StatusOK, s.dnsView(*d))
+}
+
 func (s *Server) listCertificates(w http.ResponseWriter, r *http.Request) {
 	limit := parseLimit(r, 50, 200)
-	cursor, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
-	items, err := s.Store.ListCertificates(r.Context(), r.URL.Query().Get("status"), r.URL.Query().Get("q"), limit, cursor)
+	cursor, cursorID := parseCursor(r)
+	items, err := s.Store.ListCertificates(r.Context(), r.URL.Query().Get("status"), r.URL.Query().Get("q"), limit, cursor, cursorID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	var next any
 	if len(items) == limit && len(items) > 0 {
-		next = items[len(items)-1].CreatedAt
+		last := items[len(items)-1]
+		next = fmt.Sprintf("%d:%s", last.CreatedAt, last.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
@@ -333,6 +378,26 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, j)
 }
 
+func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.Svc.CancelJob(r.Context(), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "job.cancel", "job", id, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.Svc.RetryJob(r.Context(), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "job.retry", "job", id, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) downloadJobLog(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if _, err := s.Store.GetJob(r.Context(), id); err != nil {
@@ -373,9 +438,14 @@ func (s *Server) jobEvents(w http.ResponseWriter, r *http.Request) {
 	} else if raw := r.URL.Query().Get("after"); raw != "" {
 		last, _ = strconv.ParseInt(raw, 10, 64)
 	}
+	// Subscribe before replaying history: otherwise lines written between the
+	// file read and Subscribe are lost for the rest of a long-running job.
+	lines, unsubscribe := s.Svc.Logs.Subscribe(id)
+	defer unsubscribe()
+
 	fmt.Fprint(w, "retry: 3000\n\n")
-	if lines, err := s.Svc.Logs.Read(id, last, 5000); err == nil {
-		for _, ln := range lines {
+	if history, err := s.Svc.Logs.Read(id, last, 5000); err == nil {
+		for _, ln := range history {
 			writeSSE(w, "job.log", ln.Seq, ln)
 			last = ln.Seq
 		}
@@ -396,8 +466,6 @@ func (s *Server) jobEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lines, unsubscribe := s.Svc.Logs.Subscribe(id)
-	defer unsubscribe()
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	poll := time.NewTicker(time.Second)
@@ -520,6 +588,35 @@ func (s *Server) deleteDeployment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) testDeploymentConfig(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Type   string          `json:"type"`
+		Config json.RawMessage `json:"config"`
+	}
+	if err := decodeJSON(w, r, &in, 128*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if err := s.Svc.TestDeployment(r.Context(), in.Type, in.Config); err != nil {
+		s.audit(r, "deployment.test", "deployment", in.Type, "error", err.Error())
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "deployment.test", "deployment", in.Type, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) testDeployment(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.Svc.TestDeploymentByID(r.Context(), id); err != nil {
+		s.audit(r, "deployment.test", "deployment", id, "error", err.Error())
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "deployment.test", "deployment", id, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Store.ListNotificationChannels(r.Context())
 	if err != nil {
@@ -585,15 +682,17 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
-	cursor, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
-	items, err := s.Store.ListAudit(r.Context(), parseLimit(r, 50, 200), cursor)
+	cursor, cursorID := parseCursor(r)
+	limit := parseLimit(r, 50, 200)
+	items, err := s.Store.ListAudit(r.Context(), limit, cursor, cursorID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	var next any
-	if len(items) == parseLimit(r, 50, 200) && len(items) > 0 {
-		next = items[len(items)-1].CreatedAt
+	if len(items) == limit && len(items) > 0 {
+		last := items[len(items)-1]
+		next = fmt.Sprintf("%d:%s", last.CreatedAt, last.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
@@ -638,6 +737,51 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": s.Version, "setup_required": needsSetup})
 }
 
+// metrics exposes a small Prometheus-compatible surface without an external
+// dependency. Certificate/job counts are enough for the common dashboards.
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	total, expiring, failed, active, _ := s.Store.CertificateStats(r.Context())
+	jobs, _ := s.Store.JobStatuses(r.Context())
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	fmt.Fprintf(w, "# HELP kpccssl_certificates_total Live certificates.\n")
+	fmt.Fprintf(w, "# TYPE kpccssl_certificates_total gauge\n")
+	fmt.Fprintf(w, "kpccssl_certificates_total %d\n", total)
+	fmt.Fprintf(w, "kpccssl_certificates_active %d\n", active)
+	fmt.Fprintf(w, "kpccssl_certificates_failed %d\n", failed)
+	fmt.Fprintf(w, "kpccssl_certificates_expiring_30d %d\n", expiring)
+	fmt.Fprintf(w, "# TYPE kpccssl_jobs_total gauge\n")
+	for status, n := range jobs {
+		fmt.Fprintf(w, "kpccssl_jobs_total{status=%q} %d\n", status, n)
+	}
+}
+
+// ready is a readiness probe: database, writable data directory and (unless
+// the fake engine is enabled) the acme.sh binary must be usable.
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if err := s.Store.Ping(ctx); err != nil {
+		writeProblem(w, r, http.StatusServiceUnavailable, "E_NOT_READY", "database unavailable", nil)
+		return
+	}
+	f, err := os.CreateTemp(s.Cfg.DataDir, ".ready-*")
+	if err != nil {
+		writeProblem(w, r, http.StatusServiceUnavailable, "E_NOT_READY", "data directory is not writable", nil)
+		return
+	}
+	name := f.Name()
+	f.Close()
+	_ = os.Remove(name)
+	if !s.Cfg.FakeACME {
+		st, err := os.Stat(s.Cfg.ACMEBin)
+		if err != nil || st.Mode()&0o111 == 0 {
+			writeProblem(w, r, http.StatusServiceUnavailable, "E_NOT_READY", "acme.sh is not executable", nil)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
+}
+
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	var free uint64
 	var fs syscall.Statfs_t
@@ -647,7 +791,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	acmeVersion := "unavailable"
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if v, err := s.Svc.Engine.Version(ctx); err == nil {
+	if v, err := s.Svc.ACMEVersion(ctx); err == nil {
 		acmeVersion = v
 	}
 	needsSetup, _ := s.Svc.NeedsSetup(r.Context())
@@ -655,6 +799,10 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 		"version": s.Version, "acme_version": acmeVersion, "setup_required": needsSetup,
 		"data_dir": s.Cfg.DataDir, "disk_free_bytes": free,
 		"server_time": store.Now(), "fake_acme": s.Cfg.FakeACME,
+		"instance_name":       s.Svc.SettingString(r.Context(), "instance_name", "KPCCSSL"),
+		"default_ca_id":       s.Svc.SettingString(r.Context(), "default_ca_id", ""),
+		"default_theme":       s.Svc.SettingString(r.Context(), "theme", "light"),
+		"renewal_notice_days": s.Svc.SettingInt(r.Context(), "renewal_notice_days", 30),
 	})
 }
 
@@ -673,6 +821,16 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) requireStepUp(w http.ResponseWriter, r *http.Request) bool {
+	p := principal(r)
+	if p == nil || !s.Auth.VerifyStepUp(p, r.Header.Get("X-Step-Up-Token"), time.Now()) {
+		writeProblem(w, r, http.StatusPreconditionRequired, "E_STEP_UP_REQUIRED",
+			"re-authenticate at POST /api/v1/me/step-up and send X-Step-Up-Token", nil)
+		return false
+	}
+	return true
+}
+
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	format := strings.ToLower(r.URL.Query().Get("format"))
@@ -688,6 +846,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	if c, err := s.Store.GetCertificate(r.Context(), id); err == nil {
 		base = strings.NewReplacer("*", "wildcard", "/", "_", " ", "_").Replace(c.PrimaryDomain)
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	switch format {
 	case "zip":
 		p := principal(r)
@@ -695,8 +854,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusForbidden, "E_FORBIDDEN", "operator role required for ZIP bundles containing private keys", nil)
 			return
 		}
-		if r.Header.Get("X-Confirm-Private-Key") != "yes" {
-			writeProblem(w, r, http.StatusPreconditionRequired, "E_CONFIRM_REQUIRED", "confirm private key download with X-Confirm-Private-Key: yes", nil)
+		if !s.requireStepUp(w, r) {
 			return
 		}
 		var buf bytes.Buffer
@@ -719,8 +877,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusForbidden, "E_FORBIDDEN", "operator role required for PFX export", nil)
 			return
 		}
-		if r.Header.Get("X-Confirm-Private-Key") != "yes" {
-			writeProblem(w, r, http.StatusPreconditionRequired, "E_CONFIRM_REQUIRED", "confirm private key download with X-Confirm-Private-Key: yes", nil)
+		if !s.requireStepUp(w, r) {
 			return
 		}
 		var body struct {
@@ -757,8 +914,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 				writeProblem(w, r, http.StatusForbidden, "E_FORBIDDEN", "operator role required to download private keys", nil)
 				return
 			}
-			if r.Header.Get("X-Confirm-Private-Key") != "yes" {
-				writeProblem(w, r, http.StatusPreconditionRequired, "E_CONFIRM_REQUIRED", "confirm private key download with X-Confirm-Private-Key: yes", nil)
+			if !s.requireStepUp(w, r) {
 				return
 			}
 			key, err := s.Svc.ReadPrivateKeyFile(rev)
