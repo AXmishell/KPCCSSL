@@ -38,16 +38,16 @@ func (s *Store) GetDeployment(ctx context.Context, id string) (*Deployment, erro
 // CreateDeployment inserts a deployment target.
 func (s *Store) CreateDeployment(ctx context.Context, d *Deployment) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO deployments
-		(id,certificate_id,name,type,config_enc,key_version,enabled,last_run_at,last_status,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		d.ID, d.CertificateID, d.Name, d.Type, d.ConfigEnc, d.KeyVersion, boolInt(d.Enabled), d.LastRunAt, d.LastStatus, d.CreatedAt, d.UpdatedAt)
+		(id,certificate_id,name,type,credential_id,config_enc,key_version,enabled,last_run_at,last_status,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		d.ID, d.CertificateID, d.Name, d.Type, d.CredentialID, d.ConfigEnc, d.KeyVersion, boolInt(d.Enabled), d.LastRunAt, d.LastStatus, d.CreatedAt, d.UpdatedAt)
 	return err
 }
 
 // UpdateDeployment updates a target.
 func (s *Store) UpdateDeployment(ctx context.Context, d *Deployment) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE deployments SET name=?,type=?,config_enc=?,key_version=?,enabled=?,updated_at=? WHERE id=?`,
-		d.Name, d.Type, d.ConfigEnc, d.KeyVersion, boolInt(d.Enabled), d.UpdatedAt, d.ID)
+	_, err := s.db.ExecContext(ctx, `UPDATE deployments SET name=?,type=?,credential_id=?,config_enc=?,key_version=?,enabled=?,updated_at=? WHERE id=?`,
+		d.Name, d.Type, d.CredentialID, d.ConfigEnc, d.KeyVersion, boolInt(d.Enabled), d.UpdatedAt, d.ID)
 	return err
 }
 
@@ -103,17 +103,19 @@ func (s *Store) ListDeploymentRuns(ctx context.Context, deploymentID string, lim
 	return out, rows.Err()
 }
 
-const deployCols = `SELECT id,certificate_id,name,type,config_enc,key_version,enabled,last_run_at,last_status,created_at,updated_at FROM deployments`
+const deployCols = `SELECT id,certificate_id,name,type,credential_id,config_enc,key_version,enabled,last_run_at,last_status,created_at,updated_at FROM deployments`
 
 func (s *Store) scanDeployment(row interface{ Scan(...any) error }) (*Deployment, error) {
 	var d Deployment
 	var enabled int
+	var credentialID sql.NullString
 	var lastRun sql.NullInt64
 	var lastStatus sql.NullString
-	if err := row.Scan(&d.ID, &d.CertificateID, &d.Name, &d.Type, &d.ConfigEnc, &d.KeyVersion, &enabled, &lastRun, &lastStatus, &d.CreatedAt, &d.UpdatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.CertificateID, &d.Name, &d.Type, &credentialID, &d.ConfigEnc, &d.KeyVersion, &enabled, &lastRun, &lastStatus, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return nil, notFound(err)
 	}
 	d.Enabled = enabled != 0
+	d.CredentialID = nullPtr(credentialID)
 	if lastRun.Valid {
 		d.LastRunAt = &lastRun.Int64
 	}

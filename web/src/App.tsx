@@ -11,6 +11,7 @@ import { JobDetailPage } from "@/pages/job-detail";
 import { CAAccountsPage } from "@/pages/ca-accounts";
 import { DNSCredentialsPage } from "@/pages/dns-credentials";
 import { DeploymentsPage } from "@/pages/deployments";
+import { DeploymentCredentialsPage } from "@/pages/deployment-credentials";
 import { WorkflowsPage } from "@/pages/workflows";
 import { NotificationsPage } from "@/pages/notifications";
 import { AuditPage } from "@/pages/audit";
@@ -54,6 +55,7 @@ export function App() {
         <Route path="/ca-accounts" element={<CAAccountsPage />} />
         <Route path="/dns-credentials" element={<DNSCredentialsPage />} />
         <Route path="/deployments" element={<DeploymentsPage />} />
+        <Route path="/deployment-credentials" element={<DeploymentCredentialsPage />} />
         <Route path="/workflows" element={<WorkflowsPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/audit" element={<AuditPage />} />

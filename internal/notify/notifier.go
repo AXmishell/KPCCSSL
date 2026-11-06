@@ -8,6 +8,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,25 @@ type WebhookConfig struct {
 type TelegramConfig struct {
 	BotToken string `json:"bot_token"`
 	ChatID   string `json:"chat_id"`
+}
+
+// FeishuConfig configures a Feishu/Lark custom bot. Secret enables request
+// signing and is optional.
+type FeishuConfig struct {
+	WebhookURL string `json:"webhook_url"`
+	Secret     string `json:"secret"`
+}
+
+// DingTalkConfig configures a DingTalk custom robot. Secret enables request
+// signing and is optional.
+type DingTalkConfig struct {
+	WebhookURL string `json:"webhook_url"`
+	Secret     string `json:"secret"`
+}
+
+// WeComConfig configures a WeCom (WeChat Work) group robot.
+type WeComConfig struct {
+	WebhookURL string `json:"webhook_url"`
 }
 
 // Event is a notification payload.
@@ -152,6 +172,24 @@ func (n *Notifier) Send(ctx context.Context, ch *store.NotificationChannel, subj
 			return fmt.Errorf("invalid config: %w", err)
 		}
 		return n.sendTelegram(ctx, cfg, subject, body)
+	case "feishu":
+		var cfg FeishuConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		return n.sendFeishu(ctx, cfg, subject, body)
+	case "dingtalk":
+		var cfg DingTalkConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		return n.sendDingTalk(ctx, cfg, subject, body)
+	case "wecom":
+		var cfg WeComConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		return n.sendWeCom(ctx, cfg, subject, body)
 	}
 	return fmt.Errorf("unsupported channel type %q", ch.Type)
 }
@@ -192,6 +230,24 @@ func (n *Notifier) Validate(chType, configJSON string) error {
 			return errors.New("bot_token and chat_id are required")
 		}
 		return nil
+	case "feishu":
+		var cfg FeishuConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return validateBotURL(cfg.WebhookURL, "open.feishu.cn", "open.larksuite.com")
+	case "dingtalk":
+		var cfg DingTalkConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return validateBotURL(cfg.WebhookURL, "oapi.dingtalk.com")
+	case "wecom":
+		var cfg WeComConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return validateBotURL(cfg.WebhookURL, "qyapi.weixin.qq.com")
 	}
 	return errors.New("unsupported channel type")
 }
@@ -245,15 +301,163 @@ func (n *Notifier) sendTelegram(ctx context.Context, cfg TelegramConfig, subject
 	return nil
 }
 
-// httpError strips the request URL from transport errors. Telegram embeds the
-// bot token in its URL, so returning *url.Error verbatim would leak the token
-// into logs, audit rows and API responses.
+// validateBotURL only accepts HTTPS webhooks on the vendor's official host.
+// This prevents users from turning a notification channel into an SSRF probe.
+func validateBotURL(raw string, hosts ...string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("invalid webhook URL")
+	}
+	if u.Scheme != "https" {
+		return errors.New("webhook URL must use https")
+	}
+	if u.Host == "" || u.User != nil {
+		return errors.New("webhook URL must include a host")
+	}
+	if port := u.Port(); port != "" && port != "443" {
+		return errors.New("webhook URL must use port 443")
+	}
+	for _, host := range hosts {
+		if strings.EqualFold(u.Hostname(), host) {
+			return nil
+		}
+	}
+	return fmt.Errorf("webhook URL must point to %s", strings.Join(hosts, " or "))
+}
+
+// feishuSign builds the Feishu custom-bot signature. The timestamp and secret
+// form the HMAC key and the message is empty.
+func feishuSign(timestamp int64, secret string) string {
+	mac := hmac.New(sha256.New, []byte(fmt.Sprintf("%d\n%s", timestamp, secret)))
+	mac.Write(nil)
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// dingTalkSign signs "timestamp\nsecret" with the secret as the HMAC key.
+func dingTalkSign(timestamp int64, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(fmt.Sprintf("%d\n%s", timestamp, secret)))
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// botResponseError extracts the error returned by Feishu, DingTalk and WeCom.
+func botResponseError(data []byte) error {
+	var out struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+		Code    int    `json:"code"`
+		Msg     string `json:"msg"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil
+	}
+	if out.ErrCode != 0 {
+		return fmt.Errorf("bot returned errcode %d: %s", out.ErrCode, out.ErrMsg)
+	}
+	if out.Code != 0 {
+		return fmt.Errorf("bot returned code %d: %s", out.Code, out.Msg)
+	}
+	return nil
+}
+
+func (n *Notifier) sendFeishu(ctx context.Context, cfg FeishuConfig, subject, body string) error {
+	if err := validateBotURL(cfg.WebhookURL, "open.feishu.cn", "open.larksuite.com"); err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"msg_type": "text",
+		"content":  map[string]string{"text": subject + "\n\n" + body},
+	}
+	if cfg.Secret != "" {
+		ts := time.Now().Unix()
+		payload["timestamp"] = fmt.Sprint(ts)
+		payload["sign"] = feishuSign(ts, cfg.Secret)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return n.postBotJSON(ctx, "Feishu", cfg.WebhookURL, data)
+}
+
+func (n *Notifier) sendDingTalk(ctx context.Context, cfg DingTalkConfig, subject, body string) error {
+	if err := validateBotURL(cfg.WebhookURL, "oapi.dingtalk.com"); err != nil {
+		return err
+	}
+	target, err := url.Parse(cfg.WebhookURL)
+	if err != nil {
+		return err
+	}
+	if cfg.Secret != "" {
+		ts := time.Now().UnixMilli()
+		q := target.Query()
+		q.Set("timestamp", fmt.Sprint(ts))
+		q.Set("sign", dingTalkSign(ts, cfg.Secret))
+		target.RawQuery = q.Encode()
+	}
+	data, err := json.Marshal(map[string]any{
+		"msgtype": "text",
+		"text":    map[string]string{"content": subject + "\n\n" + body},
+	})
+	if err != nil {
+		return err
+	}
+	return n.postBotJSON(ctx, "DingTalk", target.String(), data)
+}
+
+func (n *Notifier) sendWeCom(ctx context.Context, cfg WeComConfig, subject, body string) error {
+	if err := validateBotURL(cfg.WebhookURL, "qyapi.weixin.qq.com"); err != nil {
+		return err
+	}
+	data, err := json.Marshal(map[string]any{
+		"msgtype": "text",
+		"text":    map[string]string{"content": subject + "\n\n" + body},
+	})
+	if err != nil {
+		return err
+	}
+	return n.postBotJSON(ctx, "WeCom", cfg.WebhookURL, data)
+}
+
+func (n *Notifier) postBotJSON(ctx context.Context, name, rawURL string, data []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := n.Client.Do(req)
+	if err != nil {
+		return httpError(name+" request failed", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("%s returned HTTP %d", name, resp.StatusCode)
+	}
+	if err := botResponseError(respBody); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// httpError strips the request URL from transport errors. Telegram and the
+// chat bots embed secrets in their webhook URLs, so returning *url.Error
+// verbatim would leak the token into logs, audit rows and API responses.
 func httpError(prefix string, err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
 		return fmt.Errorf("%s: %v", prefix, ue.Err)
 	}
 	return fmt.Errorf("%s: %v", prefix, err)
+}
+
+// SendSMTP delivers a plain-text message using an explicit configuration. It is
+// used by the authentication mailer in addition to notification channels.
+func SendSMTP(ctx context.Context, cfg SMTPConfig, subject, body string) error {
+	return sendSMTP(ctx, cfg, subject, body)
 }
 
 func sendSMTP(ctx context.Context, cfg SMTPConfig, subject, body string) error {

@@ -392,7 +392,8 @@ erDiagram
 | `certificates` | id, name, primary_domain, san_json, key_type, ca_account_id, challenge_type, dns_credential_id, webroot, options_json, auto_renew, status, current_revision_id, next_renew_at, version | 期望配置 + 当前状态 |
 | `certificate_revisions` | id, certificate_id, serial, fingerprint_sha256, not_before, not_after, cert_path, key_path, chain_path, fullchain_path, issued_at, revoked_at | 每次签发一份，保留历史 |
 | `jobs` | id, type, certificate_id, status, attempts, payload_json, idempotency_key, started_at, finished_at, error_code, error_message, log_path | 持久化队列 |
-| `deployments` | id, certificate_id, type, config_enc, enabled, last_run_at, last_status | 部署目标 |
+| `deployments` | id, certificate_id, type, credential_id, config_enc, enabled, last_run_at, last_status | 部署目标，认证字段来自凭据 |
+| `deployment_credentials` | id, name, type, config_enc, key_version, created_at, updated_at | 云厂商/面板/SSH 认证凭据（AES-GCM） |
 | `deployment_runs` | id, deployment_id, revision_id, status, message, created_at | 部署历史 |
 | `notification_channels` | id, type, config_enc, events_json, enabled | 邮件/Webhook 等 |
 | `audit_logs` | id, actor_id, action, resource_type, resource_id, ip, ua, detail_json, created_at | 追加写，不修改 |
@@ -590,7 +591,13 @@ acme.sh 的插件没有统一元数据，需要自建一个静态目录（嵌入
 | Webhook | POST 证书/元数据到外部 URL | HMAC 签名、超时、禁止内网地址（防 SSRF）、重试 |
 | SSH/SFTP | 推送到远程主机并执行固定重载命令 | 主机密钥指纹、密钥加密、路径校验、原子写、固定 reload 白名单 |
 | 宝塔/1Panel | 调用面板 API 更新面板 SSL 或指定站点 | 管理员配置的私有地址、API key 加密、可选 TLS 校验开关 |
-| 腾讯云/阿里云 CDN/WAF | 上传证书并绑定域名 | AK/SK 加密、最小权限 RAM/策略、异步任务结果检查 |
+| 腾讯云 CDN/WAF/COS/EdgeOne | 通过 SSL 服务上传证书并绑定域名或存储桶 | AK/SK 加密、最小权限策略、异步任务结果检查 |
+| 阿里云 CDN/DCDN/WAF/OSS | 通过 CDN/DCDN/WAF RPC 或 OSS CNAME 接口更新证书 | AK/SK 加密、最小权限 RAM、Bucket 级权限 |
+| 七牛云 CDN | 上传证书后绑定加速域名 | AK/SK 加密、最小权限密钥 |
+
+认证信息集中存放在 `deployment_credentials`（类型 `tencent`/`aliyun`/`qiniu`/`baota`/`1panel`/`ssh`），
+部署目标只保存 `credential_id` 和目标参数。执行时按凭据类型白名单合并认证字段，
+删除仍被引用的凭据会被拒绝。旧部署目标的内联凭据继续兼容。
 
 **不要**把 acme.sh 的 `--reloadcmd` 直接暴露给用户。若确实需要管理员自定义命令，放在“高级/危险”设置里，默认关闭，并要求重新认证 + 审计。
 
@@ -675,6 +682,10 @@ REST + JSON，异步操作返回 `202 Accepted` + `job_id`。
 | POST | `/api/v1/certificates/{id}/deploy` | 立即部署 |
 | POST | `/api/v1/deployments/test` | 测试部署配置（不落库） |
 | POST | `/api/v1/deployments/{id}/test` | 测试已保存的部署目标 |
+| GET/POST | `/api/v1/deployment-credentials` | 部署凭据列表/创建 |
+| PATCH/DELETE | `/api/v1/deployment-credentials/{id}` | 修改/删除部署凭据 |
+| POST | `/api/v1/deployment-credentials/test` | 测试未保存的凭据（不落库） |
+| POST | `/api/v1/deployment-credentials/{id}/test` | 测试已保存的凭据 |
 | GET | `/api/v1/jobs/{id}` | 任务状态 |
 | GET | `/api/v1/jobs/{id}/events` | SSE 实时日志 |
 | GET | `/api/v1/audit-logs` | 审计 |

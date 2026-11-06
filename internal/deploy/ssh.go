@@ -42,7 +42,7 @@ type SSHConfig struct {
 	Reload        string `json:"reload"`
 }
 
-func (c SSHConfig) validate() error {
+func (c SSHConfig) validateAuth() error {
 	if strings.TrimSpace(c.Host) == "" {
 		return errors.New("host is required")
 	}
@@ -63,6 +63,13 @@ func (c SSHConfig) validate() error {
 	}
 	if c.HostKeySHA256 != "" && !strings.HasPrefix(strings.TrimSpace(c.HostKeySHA256), "SHA256:") {
 		return errors.New("host_key_sha256 must use the SHA256:... format")
+	}
+	return nil
+}
+
+func (c SSHConfig) validate() error {
+	if err := c.validateAuth(); err != nil {
+		return err
 	}
 	if !path.IsAbs(c.Directory) {
 		return errors.New("directory must be an absolute path")
@@ -185,6 +192,28 @@ func dialSSH(ctx context.Context, c SSHConfig) (*ssh.Client, error) {
 // TestSSH validates credentials and the SFTP subsystem without changing files.
 func TestSSH(ctx context.Context, c SSHConfig) error {
 	if err := c.validate(); err != nil {
+		return err
+	}
+	client, err := dialSSH(ctx, c)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	sc, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("open SFTP subsystem: %w", err)
+	}
+	defer sc.Close()
+	if _, err := sc.RealPath("."); err != nil {
+		return fmt.Errorf("SFTP check failed: %w", err)
+	}
+	return nil
+}
+
+// TestSSHCredential checks only the host/auth fields, because a credential is
+// stored separately from the target directory and reload settings.
+func TestSSHCredential(ctx context.Context, c SSHConfig) error {
+	if err := c.validateAuth(); err != nil {
 		return err
 	}
 	client, err := dialSSH(ctx, c)

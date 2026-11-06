@@ -122,6 +122,14 @@ func (d *Deployer) Run(ctx context.Context, dep *store.Deployment, rev *store.Re
 	if err != nil {
 		return fmt.Errorf("decrypt deployment config: %w", err)
 	}
+	credentialID := ""
+	if dep.CredentialID != nil {
+		credentialID = *dep.CredentialID
+	}
+	plain, err = d.resolveCredentialConfig(ctx, dep.Type, plain, credentialID)
+	if err != nil {
+		return err
+	}
 	switch dep.Type {
 	case "local_file":
 		var cfg LocalFileConfig
@@ -171,7 +179,7 @@ func (d *Deployer) Run(ctx context.Context, dep *store.Deployment, rev *store.Re
 			return err
 		}
 		return DeployOnePanel(ctx, dep.Type, cfg, bundle)
-	case "tencent_cdn", "tencent_waf":
+	case "tencent_cdn", "tencent_waf", "tencent_cos", "tencent_teo":
 		var cfg TencentConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
 			return fmt.Errorf("invalid config: %w", err)
@@ -181,7 +189,7 @@ func (d *Deployer) Run(ctx context.Context, dep *store.Deployment, rev *store.Re
 			return err
 		}
 		return DeployTencent(ctx, dep.Type, cfg, bundle)
-	case "aliyun_cdn", "aliyun_waf":
+	case "aliyun_cdn", "aliyun_waf", "aliyun_dcdn", "aliyun_oss":
 		var cfg AliyunConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
 			return fmt.Errorf("invalid config: %w", err)
@@ -191,12 +199,32 @@ func (d *Deployer) Run(ctx context.Context, dep *store.Deployment, rev *store.Re
 			return err
 		}
 		return DeployAliyun(ctx, dep.Type, cfg, bundle)
+	case "qiniu_cdn":
+		var cfg QiniuConfig
+		if err := json.Unmarshal(plain, &cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		bundle, err := bundleFromRevision(rev)
+		if err != nil {
+			return err
+		}
+		return DeployQiniu(ctx, cfg, bundle)
 	}
 	return fmt.Errorf("unsupported deployment type %q", dep.Type)
 }
 
 // Validate checks a deployment config before it is stored.
 func (d *Deployer) Validate(depType, configJSON string) error {
+	resolved, err := d.resolveCredentialConfig(context.Background(), depType, []byte(configJSON), "")
+	if err != nil {
+		return err
+	}
+	return d.validateResolved(depType, string(resolved))
+}
+
+// validateResolved validates a config whose credential fields have already
+// been merged in.
+func (d *Deployer) validateResolved(depType, configJSON string) error {
 	switch depType {
 	case "local_file":
 		var cfg LocalFileConfig
@@ -241,14 +269,20 @@ func (d *Deployer) Validate(depType, configJSON string) error {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
 		return cfg.validate(depType == "1panel_site")
-	case "tencent_cdn", "tencent_waf":
+	case "tencent_cdn", "tencent_waf", "tencent_cos", "tencent_teo":
 		var cfg TencentConfig
 		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
-		return cfg.validate()
-	case "aliyun_cdn", "aliyun_waf":
+		return cfg.validate(depType)
+	case "aliyun_cdn", "aliyun_waf", "aliyun_dcdn", "aliyun_oss":
 		var cfg AliyunConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		return cfg.validate(depType)
+	case "qiniu_cdn":
+		var cfg QiniuConfig
 		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
@@ -260,7 +294,15 @@ func (d *Deployer) Validate(depType, configJSON string) error {
 // Test validates a deployment configuration and performs a non-mutating
 // connectivity check. It is used by the "test connection" button in the UI.
 func (d *Deployer) Test(ctx context.Context, depType, configJSON string) error {
-	if err := d.Validate(depType, configJSON); err != nil {
+	resolved, err := d.resolveCredentialConfig(ctx, depType, []byte(configJSON), "")
+	if err != nil {
+		return err
+	}
+	return d.testResolved(ctx, depType, string(resolved))
+}
+
+func (d *Deployer) testResolved(ctx context.Context, depType, configJSON string) error {
+	if err := d.validateResolved(depType, configJSON); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -291,18 +333,24 @@ func (d *Deployer) Test(ctx context.Context, depType, configJSON string) error {
 			return err
 		}
 		return TestOnePanel(ctx, cfg)
-	case "tencent_cdn", "tencent_waf":
+	case "tencent_cdn", "tencent_waf", "tencent_cos", "tencent_teo":
 		var cfg TencentConfig
 		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 			return err
 		}
-		return TestTencent(ctx, cfg)
-	case "aliyun_cdn", "aliyun_waf":
+		return TestTencent(ctx, depType, cfg)
+	case "aliyun_cdn", "aliyun_waf", "aliyun_dcdn", "aliyun_oss":
 		var cfg AliyunConfig
 		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 			return err
 		}
 		return TestAliyun(ctx, depType, cfg)
+	case "qiniu_cdn":
+		var cfg QiniuConfig
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return err
+		}
+		return TestQiniu(ctx, cfg)
 	}
 	return fmt.Errorf("unsupported deployment type %q", depType)
 }
@@ -313,7 +361,15 @@ func (d *Deployer) TestStored(ctx context.Context, dep *store.Deployment) error 
 	if err != nil {
 		return fmt.Errorf("decrypt deployment config: %w", err)
 	}
-	return d.Test(ctx, dep.Type, string(plain))
+	credentialID := ""
+	if dep.CredentialID != nil {
+		credentialID = *dep.CredentialID
+	}
+	resolved, err := d.resolveCredentialConfig(ctx, dep.Type, plain, credentialID)
+	if err != nil {
+		return err
+	}
+	return d.testResolved(ctx, dep.Type, string(resolved))
 }
 
 func (d *Deployer) localFile(cfg LocalFileConfig, rev *store.Revision) error {
@@ -599,6 +655,17 @@ func sign(secret string, body []byte) string {
 }
 
 func aad(id, field string) string { return "deployments:" + id + ":" + field }
+
+// splitDomains parses a comma-separated domain list and drops empty entries.
+func splitDomains(raw string) []string {
+	out := make([]string, 0, 4)
+	for _, d := range strings.Split(raw, ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
 
 func truncate(s string, n int) string {
 	if len(s) <= n {
