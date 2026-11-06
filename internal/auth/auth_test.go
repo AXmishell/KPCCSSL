@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/axmishell/kpccssl/internal/store"
 )
 
 func TestPasswordHashAndVerify(t *testing.T) {
@@ -74,6 +76,26 @@ func TestRecoveryCodes(t *testing.T) {
 	}
 	if string(HashRecoveryCode("ABCDE-FGHIJ")) != string(HashRecoveryCode("abcde fghij")) {
 		t.Fatal("hash must normalise case and separators")
+	}
+}
+
+func TestStepUpToken(t *testing.T) {
+	m := &Manager{}
+	now := time.Unix(1_800_000_000, 0)
+	p := &Principal{Session: &store.Session{ID: "s1", CSRFSecret: "secret"}}
+	token := m.IssueStepUp(p, now)
+	if !m.VerifyStepUp(p, token, now) {
+		t.Fatal("valid step-up token rejected")
+	}
+	if m.VerifyStepUp(p, token, now.Add(StepUpTTL+time.Second)) {
+		t.Fatal("expired step-up token accepted")
+	}
+	other := &Principal{Session: &store.Session{ID: "s2", CSRFSecret: "secret"}}
+	if m.VerifyStepUp(other, token, now) {
+		t.Fatal("token accepted for another session")
+	}
+	if m.VerifyStepUp(p, token+"x", now) {
+		t.Fatal("tampered token accepted")
 	}
 }
 

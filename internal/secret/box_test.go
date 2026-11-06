@@ -2,6 +2,8 @@ package secret
 
 import (
 	"bytes"
+	"encoding/base64"
+	"os"
 	"testing"
 )
 
@@ -26,6 +28,58 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if string(pt) != "s3cret" {
 		t.Fatalf("got %q", pt)
+	}
+}
+
+func TestKeyringRotation(t *testing.T) {
+	path := t.TempDir() + "/master.key"
+	b, err := LoadOrCreate(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCT, err := b.Encrypt([]byte("old"), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := RotateFile(path)
+	if err != nil || version != 2 {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	rotated, err := LoadOrCreate(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.Version() != 2 {
+		t.Fatalf("current version = %d", rotated.Version())
+	}
+	if got, err := rotated.Decrypt(oldCT, "x"); err != nil || string(got) != "old" {
+		t.Fatalf("old ciphertext: %q err=%v", got, err)
+	}
+	newCT, err := rotated.Encrypt([]byte("new"), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix([]byte(newCT), []byte("v2:")) {
+		t.Fatalf("new ciphertext not v2: %s", newCT)
+	}
+}
+
+func TestLegacyBase64KeyWithPadding(t *testing.T) {
+	path := t.TempDir() + "/master.key"
+	// 32 bytes whose base64 form ends in '=' (legacy format).
+	raw := bytes.Repeat([]byte{0xfb}, 32)
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(raw)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := LoadOrCreate(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Version() != 1 {
+		t.Fatalf("version = %d", b.Version())
+	}
+	if _, err := b.Encrypt([]byte("x"), "a"); err != nil {
+		t.Fatal(err)
 	}
 }
 

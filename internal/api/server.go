@@ -20,6 +20,7 @@ import (
 	"github.com/axmishell/kpccssl/internal/config"
 	"github.com/axmishell/kpccssl/internal/dnsprovider"
 	"github.com/axmishell/kpccssl/internal/id"
+	"github.com/axmishell/kpccssl/internal/job"
 	"github.com/axmishell/kpccssl/internal/service"
 	"github.com/axmishell/kpccssl/internal/store"
 )
@@ -53,9 +54,11 @@ func (s *Server) routes() http.Handler {
 	r.Use(s.accessLog)
 	r.Use(securityHeaders(s.Cfg.Dev))
 	r.Use(s.loadSession)
+	r.Get("/metrics", s.metrics)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/system/health", s.health)
+		api.Get("/system/ready", s.ready)
 		api.Post("/setup", s.setup)
 		api.Post("/auth/login", s.login)
 		api.Group(func(pub chi.Router) {
@@ -65,8 +68,10 @@ func (s *Server) routes() http.Handler {
 		})
 
 		api.Group(func(pr chi.Router) {
+			pr.Use(s.csrfGuard)
 			pr.Use(s.requireAuth)
 			pr.Get("/me", s.me)
+			pr.Post("/me/step-up", s.stepUp)
 			pr.Post("/me/password", s.changePassword)
 			pr.Post("/me/totp/setup", s.totpSetup)
 			pr.Post("/me/totp/enable", s.totpEnable)
@@ -97,10 +102,14 @@ func (s *Server) routes() http.Handler {
 
 			admin.Post("/ca-accounts", s.createCA)
 			admin.Patch("/ca-accounts/{id}", s.updateCA)
+			admin.Delete("/ca-accounts/{id}", s.deleteCA)
 			admin.Post("/ca-accounts/{id}/register", s.registerCA)
+			admin.Post("/ca-accounts/{id}/disable", s.disableCA)
+			admin.Post("/ca-accounts/{id}/enable", s.enableCA)
 			admin.Post("/dns-credentials", s.createDNS)
 			admin.Patch("/dns-credentials/{id}", s.updateDNS)
 			admin.Delete("/dns-credentials/{id}", s.deleteDNS)
+			admin.Post("/dns-credentials/{id}/verify", s.verifyDNS)
 			admin.Delete("/certificates/{id}", s.deleteCertificate)
 			admin.Get("/notification-channels", s.listNotifications)
 			admin.Post("/notification-channels", s.createNotification)
@@ -112,6 +121,8 @@ func (s *Server) routes() http.Handler {
 			admin.Get("/audit-logs", s.listAudit)
 			admin.Get("/jobs/{id}/log", s.downloadJobLog)
 			admin.Get("/users", s.listUsers)
+			admin.Post("/users", s.createUser)
+			admin.Patch("/users/{id}", s.updateUser)
 		})
 
 		api.Group(func(op chi.Router) {
@@ -128,6 +139,8 @@ func (s *Server) routes() http.Handler {
 			op.Post("/deployments", s.createDeployment)
 			op.Patch("/deployments/{id}", s.updateDeployment)
 			op.Delete("/deployments/{id}", s.deleteDeployment)
+			op.Post("/jobs/{id}/cancel", s.cancelJob)
+			op.Post("/jobs/{id}/retry", s.retryJob)
 		})
 	})
 
@@ -395,11 +408,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	var conflict *service.ConflictError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeProblem(w, r, http.StatusNotFound, "E_NOT_FOUND", "resource not found", nil)
 	case errors.Is(err, store.ErrConflict):
 		writeProblem(w, r, http.StatusConflict, "E_CONFLICT", "resource was modified, reload and retry", nil)
+	case errors.As(err, &conflict):
+		writeProblem(w, r, http.StatusConflict, "E_CONFLICT", conflict.Msg, nil)
 	case errors.Is(err, service.ErrUnauthorized):
 		writeProblem(w, r, http.StatusUnauthorized, "E_UNAUTHENTICATED", "invalid email or password", nil)
 	default:
@@ -413,8 +429,8 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", de.Msg, nil)
 			return
 		}
-		slog.Warn("request failed", "path", r.URL.Path, "error", err)
-		writeProblem(w, r, http.StatusBadRequest, "E_BAD_REQUEST", err.Error(), nil)
+		slog.Warn("request failed", "path", r.URL.Path, "error", job.Redact(err.Error()))
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_REQUEST", job.Redact(err.Error()), nil)
 	}
 }
 
@@ -453,6 +469,21 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64)
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
 	return nil
+}
+
+// parseCursor accepts both the legacy integer cursor and the new
+// "<created_at>:<id>" composite cursor.
+func parseCursor(r *http.Request) (int64, string) {
+	raw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if raw == "" {
+		return 0, ""
+	}
+	if at, id, ok := strings.Cut(raw, ":"); ok {
+		n, _ := strconv.ParseInt(at, 10, 64)
+		return n, id
+	}
+	n, _ := strconv.ParseInt(raw, 10, 64)
+	return n, ""
 }
 
 func parseLimit(r *http.Request, def, max int) int {

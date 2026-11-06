@@ -84,6 +84,9 @@ export default {
       totpRequired: "请输入两步验证码",
       logoutDone: "已退出登录",
       setupDone: "初始化完成",
+      stepUpTitle: "重新验证身份",
+      stepUpHint: "下载私钥前需要重新输入当前密码；已启用两步验证时还需输入验证码。",
+      reauthenticate: "验证并继续",
     },
     dashboard: {
       title: "概览",
@@ -186,6 +189,8 @@ export default {
       empty: "还没有任务。",
       type: "任务类型",
       rerun: "重新执行",
+      canceled: "任务已取消",
+      retried: "任务已重新排队",
       duration: "耗时",
       types: {
         register_account: "注册账户",
@@ -213,6 +218,10 @@ export default {
       created: "CA 账户已创建",
       emailHint: "用于 ACME 账户联系邮箱",
       tosAccepted: "我已阅读并同意 CA 的服务条款",
+      enable: "启用",
+      disable: "停用",
+      deleted: "CA 账户已删除",
+      deleteConfirm: "删除 CA 账户 {{name}}？使用中的账户无法删除。",
     },
     dns: {
       title: "DNS 凭据",
@@ -232,6 +241,7 @@ export default {
       keepSecret: "留空表示保留现有密钥",
       providerDocs: "查看服务商权限说明",
       minRole: "建议权限",
+      verify: "验证配置",
     },
     deploy: {
       title: "部署",
@@ -313,6 +323,9 @@ export default {
       fakeAcme: "Fake ACME 模式",
       systemInfo: "系统信息",
       users: "用户",
+      addUser: "添加用户",
+      userCreated: "用户已创建",
+      userUpdated: "用户已更新",
     },
     profile: {
       title: "账户",

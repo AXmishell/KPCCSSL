@@ -50,6 +50,27 @@ func (s *Store) SetCAStatus(ctx context.Context, id, status string, lastErr *str
 	return err
 }
 
+// CountCertificatesUsingCA counts all certificates (including soft-deleted
+// rows kept for history) that reference a CA.
+func (s *Store) CountCertificatesUsingCA(ctx context.Context, id string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificates WHERE ca_account_id=?`, id).Scan(&n)
+	return n, err
+}
+
+// DeleteCAAccount removes an unused CA account.
+func (s *Store) DeleteCAAccount(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM ca_accounts WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 const caCols = `SELECT id,name,directory_url,email,eab_kid,eab_hmac_enc,tos_accepted_at,key_version,status,last_error,created_at,updated_at FROM ca_accounts`
 
 func (s *Store) scanCA(row interface{ Scan(...any) error }) (*CAAccount, error) {

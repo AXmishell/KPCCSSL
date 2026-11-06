@@ -268,9 +268,18 @@ func TestEndToEndIssueFlow(t *testing.T) {
 		t.Fatalf("idempotency mismatch: %s vs %s", got, jobID1)
 	}
 
+	// Private-key downloads require a fresh step-up grant.
+	data = h.mustDo(t, "POST", "/me/step-up", map[string]string{"password": "correct-horse-battery-staple"}, h.csrf, http.StatusOK)
+	var stepUp struct {
+		Token string `json:"step_up_token"`
+	}
+	if err := json.Unmarshal(data, &stepUp); err != nil || stepUp.Token == "" {
+		t.Fatalf("step-up token missing: %s", data)
+	}
+
 	// Download ZIP and verify it contains the key material.
 	zipReq, _ := http.NewRequest("GET", h.server.URL+"/api/v1/certificates/"+cert.ID+"/download?format=zip", nil)
-	zipReq.Header.Set("X-Confirm-Private-Key", "yes")
+	zipReq.Header.Set("X-Step-Up-Token", stepUp.Token)
 	zipResp, err := h.client.Do(zipReq)
 	if err != nil {
 		t.Fatal(err)

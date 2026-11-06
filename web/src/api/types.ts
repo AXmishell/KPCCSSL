@@ -188,6 +188,10 @@ export interface SystemInfo {
   disk_free_bytes: number;
   server_time: number;
   fake_acme: boolean;
+  instance_name: string;
+  default_ca_id: string;
+  default_theme: "light" | "dark" | string;
+  renewal_notice_days: number;
 }
 
 export interface Problem {
@@ -202,7 +206,7 @@ export interface Problem {
 
 export interface Page<T> {
   items: T[];
-  next_cursor?: number | null;
+  next_cursor?: number | string | null;
 }
 
 export interface CAInput {

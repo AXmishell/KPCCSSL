@@ -16,6 +16,12 @@ type Engine interface {
 	Version(ctx context.Context) (string, error)
 }
 
+// Forgetter optionally removes acme.sh state for a certificate that is being
+// deleted. Implementations must only touch their own home directory.
+type Forgetter interface {
+	Forget(ctx context.Context, domain, keyType string) error
+}
+
 // RegisterRequest registers or updates an ACME account for a directory URL.
 type RegisterRequest struct {
 	DirectoryURL string
@@ -66,7 +72,8 @@ type RevokeRequest struct {
 	KeyType        string
 	Reason         int
 	Env            map[string]string
-	RevokeCertPath string // fallback when the acme.sh state was lost
+	DirectoryURL   string
+	RevokeCertPath string // preferred when available; also works after acme.sh state loss
 }
 
 // ExportPaths points at the atomically exported certificate files.

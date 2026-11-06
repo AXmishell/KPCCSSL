@@ -41,6 +41,19 @@ func TestSafeJoin(t *testing.T) {
 			t.Fatalf("accepted %q", bad)
 		}
 	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := safeJoin(root, "link/cert.pem"); err == nil {
+		t.Fatal("symlinked parent directory escaped the allow-list")
+	}
+	if err := os.Symlink(filepath.Join(outside, "target"), filepath.Join(root, "evil.pem")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := safeJoin(root, "evil.pem"); err == nil {
+		t.Fatal("symlink destination was accepted")
+	}
 }
 
 func TestSafeDirAllowList(t *testing.T) {

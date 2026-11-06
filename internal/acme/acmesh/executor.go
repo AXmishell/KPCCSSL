@@ -45,10 +45,34 @@ func New(bin, home string) *Executor {
 // Home exposes the acme home path.
 func (e *Executor) Home() string { return e.cfg.Home }
 
+// Forget removes the acme.sh state directory for one certificate. It is used
+// when a certificate is soft-deleted so re-creating the same domain starts from
+// a clean slate instead of inheriting a stale SAN/CA configuration.
+func (e *Executor) Forget(ctx context.Context, domain, keyType string) error {
+	if domain == "" || filepath.IsAbs(domain) || strings.ContainsAny(domain, `/\`) || strings.Contains(domain, "..") {
+		return fmt.Errorf("refusing to remove unsafe domain state %q", domain)
+	}
+	dir := filepath.Join(e.cfg.Home, domain)
+	if acme.IsECC(keyType) {
+		dir += "_ecc"
+	}
+	rel, err := filepath.Rel(e.cfg.Home, dir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to remove state outside acme home")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove acme state %s: %w", dir, err)
+	}
+	return nil
+}
+
 // Version runs `acme.sh --version`.
 func (e *Executor) Version(ctx context.Context) (string, error) {
 	var buf bytes.Buffer
-	if _, err := e.run(ctx, VersionArgs(), nil, &buf, false); err != nil {
+	if _, err := e.run(ctx, VersionArgs(), nil, &buf, false, false); err != nil {
 		return "", err
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -66,7 +90,7 @@ func (e *Executor) RegisterAccount(ctx context.Context, req acme.RegisterRequest
 	if err != nil {
 		return err
 	}
-	_, err = e.run(ctx, args, nil, log, false)
+	_, err = e.run(ctx, args, nil, log, false, true)
 	return err
 }
 
@@ -77,14 +101,14 @@ func (e *Executor) Issue(ctx context.Context, req acme.IssueRequest, stageDir st
 	if err != nil {
 		return paths, err
 	}
-	if _, err := e.run(ctx, args, req.Env, log, false); err != nil {
+	if _, err := e.run(ctx, args, req.Env, log, false, true); err != nil {
 		return paths, err
 	}
 	installArgs, err := InstallArgs(req.Domains[0], req.KeyType, e.cfg.Home, paths)
 	if err != nil {
 		return paths, err
 	}
-	if _, err := e.run(ctx, installArgs, req.Env, log, false); err != nil {
+	if _, err := e.run(ctx, installArgs, req.Env, log, false, true); err != nil {
 		return paths, err
 	}
 	return paths, verifyExport(paths)
@@ -97,7 +121,7 @@ func (e *Executor) Renew(ctx context.Context, req acme.RenewRequest, stageDir st
 	if err != nil {
 		return paths, err
 	}
-	if _, err := e.run(ctx, args, req.Env, log, true); err != nil {
+	if _, err := e.run(ctx, args, req.Env, log, true, true); err != nil {
 		if errors.Is(err, ErrSkipped) {
 			return paths, ErrSkipped
 		}
@@ -107,7 +131,7 @@ func (e *Executor) Renew(ctx context.Context, req acme.RenewRequest, stageDir st
 	if err != nil {
 		return paths, err
 	}
-	if _, err := e.run(ctx, installArgs, req.Env, log, false); err != nil {
+	if _, err := e.run(ctx, installArgs, req.Env, log, false, true); err != nil {
 		return paths, err
 	}
 	return paths, verifyExport(paths)
@@ -119,7 +143,7 @@ func (e *Executor) Revoke(ctx context.Context, req acme.RevokeRequest, log io.Wr
 	if err != nil {
 		return err
 	}
-	_, err = e.run(ctx, args, req.Env, log, false)
+	_, err = e.run(ctx, args, req.Env, log, false, true)
 	return err
 }
 
@@ -127,7 +151,7 @@ func (e *Executor) Revoke(ctx context.Context, req acme.RevokeRequest, log io.Wr
 func (e *Executor) List(ctx context.Context, log io.Writer) ([]acme.ListEntry, error) {
 	var buf bytes.Buffer
 	out := io.MultiWriter(log, &buf)
-	_, err := e.run(ctx, ListArgs(e.cfg.Home), nil, out, false)
+	_, err := e.run(ctx, ListArgs(e.cfg.Home), nil, out, false, true)
 	if err != nil {
 		if strings.Contains(strings.ToLower(buf.String()), "nothing to list") {
 			return nil, nil
@@ -139,7 +163,7 @@ func (e *Executor) List(ctx context.Context, log io.Writer) ([]acme.ListEntry, e
 
 // run executes the binary with a minimal environment, serialising on the acme
 // home lock. The returned output is the tail used for error classification.
-func (e *Executor) run(ctx context.Context, args []string, extraEnv map[string]string, log io.Writer, allowSkip bool) (string, error) {
+func (e *Executor) run(ctx context.Context, args []string, extraEnv map[string]string, log io.Writer, allowSkip, useLock bool) (string, error) {
 	if e.cfg.Bin == "" {
 		return "", fmt.Errorf("acme.sh binary is not configured")
 	}
@@ -149,14 +173,15 @@ func (e *Executor) run(ctx context.Context, args []string, extraEnv map[string]s
 	if err := os.MkdirAll(e.cfg.Home, 0o700); err != nil {
 		return "", err
 	}
-	unlock, err := e.lock(ctx)
-	if err != nil {
-		return "", err
+	if useLock {
+		unlock, err := e.lock(ctx)
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
+		e.mu.Lock()
+		defer e.mu.Unlock()
 	}
-	defer unlock()
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	cmd := exec.CommandContext(ctx, e.cfg.Bin, args...)
 	cmd.Env = buildEnv(e.cfg.Home, extraEnv)
@@ -176,7 +201,7 @@ func (e *Executor) run(ctx context.Context, args []string, extraEnv map[string]s
 	}
 	cmd.WaitDelay = 10 * time.Second
 
-	err = cmd.Run()
+	err := cmd.Run()
 	output := tail.String()
 	if ctx.Err() != nil {
 		return output, &acme.Error{Code: acme.CodeTimeout, Message: "job timed out", Output: output}

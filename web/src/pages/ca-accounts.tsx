@@ -2,7 +2,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus, Power, RefreshCw, Trash2 } from "lucide-react";
 import { useAuth } from "@/auth";
 import { qk, useAction, useCA } from "@/api/queries";
 import { errorMessage, request } from "@/api/client";
@@ -26,6 +26,14 @@ export function CAAccountsPage() {
     (id: string) => request<{ job_id: string }>(`/ca-accounts/${id}/register`, { method: "POST", body: {} }),
     { success: t("ca.registerQueued") },
   );
+  const toggle = useAction(
+    (ca: CAAccount) =>
+      request(`/ca-accounts/${ca.id}/${ca.status === "disabled" ? "enable" : "disable"}`, { method: "POST", body: {} }),
+    { success: t("common.saved") },
+  );
+  const remove = useAction((id: string) => request(`/ca-accounts/${id}`, { method: "DELETE" }), {
+    success: t("ca.deleted"),
+  });
 
   return (
     <div>
@@ -69,14 +77,28 @@ export function CAAccountsPage() {
                 <Td className="text-muted-foreground">{formatDateTime(ca.created_at)}</Td>
                 <Td className="text-right">
                   {isAdmin && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => register.mutate(ca.id)}
-                      disabled={register.isPending}
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" /> {t("ca.register")}
-                    </Button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => register.mutate(ca.id)}
+                        disabled={register.isPending || ca.status === "disabled"}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" /> {t("ca.register")}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => toggle.mutate(ca)}>
+                        <Power className="h-3.5 w-3.5" /> {ca.status === "disabled" ? t("ca.enable") : t("ca.disable")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          if (window.confirm(t("ca.deleteConfirm", { name: ca.name }))) remove.mutate(ca.id);
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   )}
                 </Td>
               </tr>

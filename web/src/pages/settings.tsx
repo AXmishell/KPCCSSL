@@ -7,6 +7,7 @@ import { errorMessage, request } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, Input, Select } from "@/components/ui/input";
 import { PageHeader, Spinner, Table, Td, Th } from "@/components/ui/misc";
 import { formatBytes } from "@/lib/format";
@@ -22,6 +23,9 @@ export function SettingsPage() {
   const { data: caData } = useCA();
   const [form, setForm] = React.useState<Record<string, string>>({});
   const [busy, setBusy] = React.useState(false);
+  const [userOpen, setUserOpen] = React.useState(false);
+  const [userBusy, setUserBusy] = React.useState(false);
+  const [newUser, setNewUser] = React.useState({ email: "", password: "", role: "operator" });
 
   React.useEffect(() => {
     if (!settings) return;
@@ -30,7 +34,7 @@ export function SettingsPage() {
       default_ca_id: String(settings.default_ca_id ?? ""),
       renewal_notice_days: String(settings.renewal_notice_days ?? 30),
       retention_days: String(settings.retention_days ?? 30),
-      theme: readTheme(),
+      theme: String(settings.theme ?? readTheme()),
     });
   }, [settings]);
 
@@ -54,6 +58,31 @@ export function SettingsPage() {
       toast.error(errorMessage(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const createUser = async () => {
+    setUserBusy(true);
+    try {
+      await request("/users", { method: "POST", body: newUser });
+      toast.success(t("settings.userCreated"));
+      setUserOpen(false);
+      setNewUser({ email: "", password: "", role: "operator" });
+      void qc.invalidateQueries({ queryKey: ["users"] });
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setUserBusy(false);
+    }
+  };
+
+  const patchUser = async (id: string, body: Record<string, unknown>) => {
+    try {
+      await request(`/users/${id}`, { method: "PATCH", body });
+      toast.success(t("settings.userUpdated"));
+      void qc.invalidateQueries({ queryKey: ["users"] });
+    } catch (err) {
+      toast.error(errorMessage(err));
     }
   };
 
@@ -144,8 +173,9 @@ export function SettingsPage() {
       </div>
 
       <Card className="mt-6">
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>{t("settings.users")}</CardTitle>
+          <Button size="sm" onClick={() => setUserOpen(true)}>{t("settings.addUser")}</Button>
         </CardHeader>
         <CardContent>
           <Table>
@@ -155,6 +185,7 @@ export function SettingsPage() {
                 <Th>{t("profile.role")}</Th>
                 <Th>{t("profile.totp")}</Th>
                 <Th>{t("common.status")}</Th>
+                <Th>{t("common.actions")}</Th>
               </tr>
             </thead>
             <tbody>
@@ -170,12 +201,59 @@ export function SettingsPage() {
                       {u.disabled ? t("common.disabled") : t("common.enabled")}
                     </Badge>
                   </Td>
+                  <Td>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        className="h-7 w-28"
+                        value={u.role}
+                        onChange={(e) => void patchUser(u.id, { role: e.target.value })}
+                      >
+                        <option value="viewer">viewer</option>
+                        <option value="operator">operator</option>
+                        <option value="admin">admin</option>
+                      </Select>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void patchUser(u.id, { disabled: !u.disabled })}
+                      >
+                        {u.disabled ? t("common.enabled") : t("common.disabled")}
+                      </Button>
+                    </div>
+                  </Td>
                 </tr>
               ))}
             </tbody>
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={userOpen} onOpenChange={setUserOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("settings.addUser")}</DialogTitle>
+          </DialogHeader>
+          <Field label={t("auth.email")}>
+            <Input value={newUser.email} onChange={(e) => setNewUser((u) => ({ ...u, email: e.target.value }))} />
+          </Field>
+          <Field label={t("auth.password")}>
+            <Input type="password" value={newUser.password} onChange={(e) => setNewUser((u) => ({ ...u, password: e.target.value }))} />
+          </Field>
+          <Field label={t("profile.role")}>
+            <Select value={newUser.role} onChange={(e) => setNewUser((u) => ({ ...u, role: e.target.value }))}>
+              <option value="viewer">viewer</option>
+              <option value="operator">operator</option>
+              <option value="admin">admin</option>
+            </Select>
+          </Field>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUserOpen(false)}>{t("common.cancel")}</Button>
+            <Button disabled={userBusy || !newUser.email || !newUser.password} onClick={() => void createUser()}>
+              {t("common.create")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

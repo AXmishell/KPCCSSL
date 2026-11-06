@@ -10,6 +10,7 @@ RUN cd web && npm run build
 # ---- backend --------------------------------------------------------------
 FROM golang:1.27-alpine AS build
 ARG ACME_VERSION=3.1.6
+ARG ACME_SHA256=0d3f9000ac44a6331314742a88c475f79134e24fc991997883652adc59efc486
 ARG VERSION=docker
 ARG COMMIT=unknown
 ARG GOPROXY=https://proxy.golang.org,direct
@@ -28,7 +29,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /out/kpccssl ./cmd/kpccssl
 RUN mkdir -p /out/acme && \
     URL="${ACME_SOURCE_URL:-https://github.com/acmesh-official/acme.sh/archive/refs/tags/${ACME_VERSION}.tar.gz}" && \
-    curl -fsSL "$URL" | tar -xz -C /out/acme --strip-components=1 && \
+    curl -fsSL "$URL" -o /tmp/acme.sh.tar.gz && \
+    if [ -n "$ACME_SHA256" ]; then echo "$ACME_SHA256  /tmp/acme.sh.tar.gz" | sha256sum -c -; fi && \
+    tar -xzf /tmp/acme.sh.tar.gz -C /out/acme --strip-components=1 && \
+    rm -f /tmp/acme.sh.tar.gz && \
     cp /out/acme/LICENSE.md /out/acme-LICENSE.md
 
 # ---- runtime --------------------------------------------------------------
@@ -46,7 +50,7 @@ RUN if [ -n "$APK_MIRROR" ]; then sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}
     addgroup -g 10001 kpccssl && \
     adduser -u 10001 -G kpccssl -D -H -s /sbin/nologin kpccssl && \
     mkdir -p /data /opt/acme.sh /licenses && \
-    chown -R kpccssl:kpccssl /data /opt/acme.sh
+    chown -R kpccssl:kpccssl /data
 
 COPY --from=build /out/kpccssl /usr/local/bin/kpccssl
 COPY --from=build /out/acme /opt/acme.sh
@@ -66,7 +70,7 @@ VOLUME ["/data"]
 EXPOSE 8080 8081 8443
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/api/v1/system/health || exit 1
+  CMD wget -qO- http://127.0.0.1:8080/api/v1/system/ready || exit 1
 
 ENTRYPOINT ["/usr/local/bin/kpccssl"]
 CMD ["serve"]

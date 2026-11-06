@@ -60,6 +60,8 @@ test("setup, issue a certificate and download it", async ({ page }) => {
   page.on("dialog", (dialog) => dialog.accept());
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "ZIP", exact: true }).click();
+  await page.getByLabel("密码", { exact: true }).fill(PASSWORD);
+  await page.getByRole("button", { name: "验证并继续" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toContain(".zip");
 

@@ -11,7 +11,7 @@
 ## 凭据与密钥
 
 - DNS 凭据、EAB HMAC、SMTP/Webhook/Telegram 密钥、TOTP secret 使用 AES-256-GCM 加密，AAD 绑定记录与字段。
-- 主密钥位于 `<data_dir>/master.key`（0600），或通过 `KPCC_MASTER_KEY` 注入。
+- 主密钥位于 `<data_dir>/master.key`（0600），或通过 `KPCC_MASTER_KEY` 注入。文件支持多版本 keyring；`kpccssl admin rotate-key` 会追加新版本并保留旧版本用于解密。
 - 没有 `master.key` 时，上述加密数据全部无法解密；备份时必须单独离线保存，并与数据库分开存放。
 - 每次任务使用临时 `--accountconf`，任务结束后删除；并清理 acme.sh 配置中的 `SAVED_*`、`CA_EAB_*` 残留。
 - 日志默认脱敏，不输出密钥、token、密码等敏感字段。
@@ -19,14 +19,15 @@
 ## 认证与下载
 
 - 密码使用 Argon2id 哈希；会话 Cookie 为 HttpOnly + Secure（开发模式除外），生产使用 `__Host-` 前缀。
-- CSRF 使用双提交 Cookie + Origin 校验。
+- CSRF 使用服务端会话派生 token + Origin 校验。
 - 角色分为 viewer / operator / admin；viewer 不可下载私钥。
-- 私钥下载需要 operator/admin，并带 `X-Confirm-Private-Key: yes`，同时写入审计。
+- 私钥下载需要 operator/admin，并先调用 `POST /api/v1/me/step-up` 重新输入密码（启用 TOTP 时还需验证码），再带短期 `X-Step-Up-Token` 请求；同时写入审计。
 - 可选 TOTP 双因素与恢复码。
+- 会话有 12 小时滑动过期和 7 天绝对上限。
 
 ## 供应链
 
-- 镜像固定 acme.sh 版本（构建参数 `ACME_VERSION`，默认 `3.1.6`），禁止运行时 `--upgrade` / `--auto-upgrade`。
+- 镜像固定 acme.sh 版本（构建参数 `ACME_VERSION`，默认 `3.1.6`）并校验 `ACME_SHA256`，禁止运行时 `--upgrade` / `--auto-upgrade`。自定义 `ACME_SOURCE_URL` 时必须同时提供匹配的校验和。
 - CI 运行 govulncheck、gosec(high/high)、npm audit 与 Trivy。
 - 发布产物提供 SHA-256；镜像发布到 `ghcr.io/axmishell/kpccssl`。
 

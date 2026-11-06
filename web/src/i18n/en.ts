@@ -84,6 +84,9 @@ export default {
       totpRequired: "Enter your two-factor code",
       logoutDone: "Signed out",
       setupDone: "Setup complete",
+      stepUpTitle: "Re-authenticate",
+      stepUpHint: "Private-key downloads require your current password, plus a two-factor code when enabled.",
+      reauthenticate: "Verify and continue",
     },
     dashboard: {
       title: "Overview",
@@ -180,6 +183,8 @@ export default {
       empty: "No jobs yet.",
       type: "Type",
       rerun: "Re-run",
+      canceled: "Job canceled",
+      retried: "Job re-queued",
       duration: "Duration",
       types: {
         register_account: "Register account",
@@ -207,6 +212,10 @@ export default {
       created: "CA account created",
       emailHint: "Contact email for the ACME account",
       tosAccepted: "I have read and accept the CA terms of service",
+      enable: "Enable",
+      disable: "Disable",
+      deleted: "CA account deleted",
+      deleteConfirm: "Delete CA account {{name}}? Accounts in use cannot be deleted.",
     },
     dns: {
       title: "DNS credentials",
@@ -226,6 +235,7 @@ export default {
       keepSecret: "Leave blank to keep the existing secret",
       providerDocs: "Provider permission docs",
       minRole: "Recommended permissions",
+      verify: "Verify config",
     },
     deploy: {
       title: "Deployments",
@@ -307,6 +317,9 @@ export default {
       fakeAcme: "Fake ACME mode",
       systemInfo: "System info",
       users: "Users",
+      addUser: "Add user",
+      userCreated: "User created",
+      userUpdated: "User updated",
     },
     profile: {
       title: "Account",

@@ -3,15 +3,19 @@ package service
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/axmishell/kpccssl/internal/acme"
@@ -50,7 +54,7 @@ func (s *Service) CreateCertificate(ctx context.Context, in CertInput) (*store.C
 	c.Version = 1
 	c.CreatedAt, c.UpdatedAt = now, now
 	if err := s.Store.CreateCertificate(ctx, c); err != nil {
-		return nil, err
+		return nil, mapCertDomainErr(err)
 	}
 	s.AddEvent(ctx, c.ID, "created", "certificate draft created", "")
 	return c, nil
@@ -77,7 +81,7 @@ func (s *Service) UpdateCertificate(ctx context.Context, id string, in CertInput
 	c.CreatedAt = existing.CreatedAt
 	c.UpdatedAt = store.Now()
 	if err := s.Store.UpdateCertificate(ctx, c); err != nil {
-		return nil, err
+		return nil, mapCertDomainErr(err)
 	}
 	s.AddEvent(ctx, id, "updated", "desired configuration updated", "")
 	return s.Store.GetCertificate(ctx, id)
@@ -90,6 +94,14 @@ func (s *Service) buildCertificate(ctx context.Context, in CertInput, certID str
 	}
 	if err := certificate.ValidateKeyType(in.KeyType); err != nil {
 		return nil, err
+	}
+	if exists, err := s.Store.CertificateDomainExists(ctx, primary, certID); err != nil {
+		return nil, err
+	} else if exists {
+		return nil, &certificate.ValidationError{
+			Field:   "primary_domain",
+			Message: "a certificate for this primary domain already exists",
+		}
 	}
 	if err := certificate.ValidateChallenge(in.ChallengeType, sans); err != nil {
 		return nil, err
@@ -310,13 +322,23 @@ func (s *Service) Revoke(ctx context.Context, certID, idem string, reason int) (
 	return j, nil
 }
 
-// SoftDeleteCertificate stops renewals but keeps files and history.
+// SoftDeleteCertificate stops renewals but keeps revision files and history.
+// acme.sh state is removed so reusing the domain does not inherit stale config.
 func (s *Service) SoftDeleteCertificate(ctx context.Context, certID string) error {
-	err := s.Store.SoftDeleteCertificate(ctx, certID, store.Now())
-	if err == nil {
-		s.AddEvent(ctx, certID, "deleted", "certificate soft-deleted", "")
+	c, err := s.Store.GetCertificate(ctx, certID)
+	if err != nil {
+		return err
 	}
-	return err
+	if err := s.Store.SoftDeleteCertificate(ctx, certID, store.Now()); err != nil {
+		return err
+	}
+	if f, ok := s.Engine.(acme.Forgetter); ok {
+		if err := f.Forget(ctx, c.PrimaryDomain, c.KeyType); err != nil {
+			slog.Warn("cannot remove acme.sh state for deleted certificate", "certificate", certID, "error", err)
+		}
+	}
+	s.AddEvent(ctx, certID, "deleted", "certificate soft-deleted", "")
+	return nil
 }
 
 func (s *Service) handleIssue(ctx context.Context, j *store.Job, log io.Writer) error {
@@ -325,7 +347,6 @@ func (s *Service) handleIssue(ctx context.Context, j *store.Job, log io.Writer) 
 	if err != nil {
 		return job.Permanent(err)
 	}
-	prevStatus := c.Status
 	var payload struct {
 		Force bool `json:"force"`
 	}
@@ -339,10 +360,7 @@ func (s *Service) handleIssue(ctx context.Context, j *store.Job, log io.Writer) 
 	paths, err := s.runIssue(ctx, c, j, force, log)
 	if err != nil {
 		code, msg := errorParts(err)
-		status := "failed"
-		if prevStatus == "active" {
-			status = "active"
-		}
+		status := failedOrActive(c)
 		_ = s.Store.SetCertificateStatus(ctx, c.ID, status, &code, &msg, store.Now())
 		if c.DNSCredentialID != nil && (code == acme.CodeDNSAuth || code == acme.CodeDNSPropagation) {
 			_ = s.Store.SetDNSCredentialHealth(ctx, *c.DNSCredentialID, "error", &msg, nil, store.Now())
@@ -354,7 +372,7 @@ func (s *Service) handleIssue(ctx context.Context, j *store.Job, log io.Writer) 
 	rev, err := s.finalize(ctx, c, paths, j, log)
 	if err != nil {
 		code, msg := errorParts(err)
-		_ = s.Store.SetCertificateStatus(ctx, c.ID, "failed", &code, &msg, store.Now())
+		_ = s.Store.SetCertificateStatus(ctx, c.ID, failedOrActive(c), &code, &msg, store.Now())
 		s.AddEvent(ctx, c.ID, "issue_failed", code+": "+msg, j.ID)
 		return err
 	}
@@ -418,12 +436,23 @@ func (s *Service) handleRenew(ctx context.Context, j *store.Job, log io.Writer) 
 		Force bool `json:"force"`
 	}
 	_ = json.Unmarshal([]byte(j.PayloadJSON), &payload)
+	drift, err := s.renewConfigDrift(ctx, c)
+	if err != nil {
+		return err
+	}
 	prevStatus := c.Status
 	if prevStatus != "active" {
 		_ = s.Store.SetCertificateStatus(ctx, c.ID, "renewing", nil, nil, store.Now())
 	}
 	s.AddEvent(ctx, c.ID, "renewing", "renewal started", j.ID)
-	paths, err := s.runRenew(ctx, c, j, payload.Force, log)
+	var paths acme.ExportPaths
+	if drift {
+		fmt.Fprintf(log, "desired configuration changed; reissuing with the current settings\n")
+		s.AddEvent(ctx, c.ID, "renew_reissue", "configuration drift detected; issuing a new certificate", j.ID)
+		paths, err = s.runIssue(ctx, c, j, true, log)
+	} else {
+		paths, err = s.runRenew(ctx, c, j, payload.Force, log)
+	}
 	if errors.Is(err, acmesh.ErrSkipped) {
 		fmt.Fprintf(log, "acme.sh reports the certificate is not due; scheduling another check in 24h\n")
 		now := store.Now()
@@ -436,11 +465,7 @@ func (s *Service) handleRenew(ctx context.Context, j *store.Job, log io.Writer) 
 	}
 	if err != nil {
 		code, msg := errorParts(err)
-		status := "failed"
-		if prevStatus == "active" {
-			status = "active"
-		}
-		_ = s.Store.SetCertificateStatus(ctx, c.ID, status, &code, &msg, store.Now())
+		_ = s.Store.SetCertificateStatus(ctx, c.ID, failedOrActive(c), &code, &msg, store.Now())
 		_ = s.Store.SetNextRenew(ctx, c.ID, store.Now()+6*3600, store.Now())
 		s.AddEvent(ctx, c.ID, "renew_failed", code+": "+msg, j.ID)
 		s.Notify(ctx, "certificate.renew_failed", "cert:"+c.ID+":"+j.ID, "Certificate renewal failed", c.PrimaryDomain+"\n"+code+": "+msg)
@@ -449,11 +474,7 @@ func (s *Service) handleRenew(ctx context.Context, j *store.Job, log io.Writer) 
 	rev, err := s.finalize(ctx, c, paths, j, log)
 	if err != nil {
 		code, msg := errorParts(err)
-		status := "failed"
-		if prevStatus == "active" {
-			status = "active"
-		}
-		_ = s.Store.SetCertificateStatus(ctx, c.ID, status, &code, &msg, store.Now())
+		_ = s.Store.SetCertificateStatus(ctx, c.ID, failedOrActive(c), &code, &msg, store.Now())
 		_ = s.Store.SetNextRenew(ctx, c.ID, store.Now()+6*3600, store.Now())
 		s.AddEvent(ctx, c.ID, "renew_failed", code+": "+msg, j.ID)
 		return err
@@ -517,7 +538,7 @@ func (s *Service) finalize(ctx context.Context, c *store.Certificate, paths acme
 		{paths.FullchainPath, final.FullchainPath},
 	}
 	for _, m := range moves {
-		if err := os.Rename(m.from, m.to); err != nil {
+		if err := moveFile(m.from, m.to); err != nil {
 			_ = os.RemoveAll(dir)
 			return nil, fmt.Errorf("move exported certificate: %w", err)
 		}
@@ -538,27 +559,34 @@ func (s *Service) finalize(ctx context.Context, c *store.Certificate, paths acme
 	if err := os.Chmod(final.KeyPath, 0o600); err != nil {
 		return nil, err
 	}
-	// Switch the current symlink atomically.
-	link := filepath.Join(s.Cfg.CertDir, c.ID, "current")
-	tmpLink := link + ".tmp"
-	_ = os.Remove(tmpLink)
-	if err := os.Symlink(filepath.Join("revisions", revID), tmpLink); err == nil {
-		_ = os.Rename(tmpLink, link)
+	configHash, err := s.certConfigHash(ctx, c)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
 	}
 	now := store.Now()
 	rev := &store.Revision{
 		ID: revID, CertificateID: c.ID, Serial: info.Serial, FingerprintSHA256: info.FingerprintSHA256,
 		NotBefore: info.NotBefore, NotAfter: info.NotAfter,
 		CertPath: final.CertPath, KeyPath: final.KeyPath, ChainPath: final.ChainPath, FullchainPath: final.FullchainPath,
-		IssuedAt: now, CreatedAt: now,
+		ConfigHash: configHash, IssuedAt: now, CreatedAt: now,
 	}
-	if err := s.Store.CreateRevision(ctx, rev); err != nil {
+	nextRenew := certificate.RenewalTime(info.NotBefore, info.NotAfter, time.Now())
+	if err := s.Store.ActivateRevision(ctx, c.ID, rev, nextRenew, now); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	nextRenew := certificate.RenewalTime(info.NotAfter, time.Now())
-	if err := s.Store.MarkIssued(ctx, c.ID, rev.ID, nextRenew, now); err != nil {
-		return nil, err
+	// The stable `current` symlink is convenient for external consumers, but
+	// the database paths are authoritative. A failure here must not roll back
+	// an already-activated revision.
+	link := filepath.Join(s.Cfg.CertDir, c.ID, "current")
+	tmpLink := link + ".tmp"
+	_ = os.Remove(tmpLink)
+	if err := os.Symlink(filepath.Join("revisions", revID), tmpLink); err != nil {
+		fmt.Fprintf(log, "warning: cannot create current symlink: %v\n", err)
+	} else if err := os.Rename(tmpLink, link); err != nil {
+		_ = os.Remove(tmpLink)
+		fmt.Fprintf(log, "warning: cannot switch current symlink: %v\n", err)
 	}
 	if c.DNSCredentialID != nil {
 		_ = s.Store.SetDNSCredentialHealth(ctx, *c.DNSCredentialID, "ok", nil, &now, now)
@@ -587,7 +615,14 @@ func (s *Service) handleRevoke(ctx context.Context, j *store.Job, log io.Writer)
 	if err != nil {
 		return job.Permanent(err)
 	}
-	req := acme.RevokeRequest{Domain: c.PrimaryDomain, KeyType: c.KeyType, Reason: payload.Reason, Env: env, RevokeCertPath: rev.CertPath}
+	ca, err := s.Store.GetCAAccount(ctx, c.CAAccountID)
+	if err != nil {
+		return job.Permanent(err)
+	}
+	req := acme.RevokeRequest{
+		Domain: c.PrimaryDomain, KeyType: c.KeyType, Reason: payload.Reason, Env: env,
+		DirectoryURL: ca.DirectoryURL, RevokeCertPath: rev.CertPath,
+	}
 	if err := s.Engine.Revoke(ctx, req, log); err != nil {
 		code, msg := errorParts(err)
 		s.AddEvent(ctx, c.ID, "revoke_failed", code+": "+msg, j.ID)
@@ -750,6 +785,131 @@ func (s *Service) enqueueDeployments(ctx context.Context, certID, revisionID str
 		key := "auto-deploy:" + d.ID + ":" + revisionID
 		_, _, _ = s.Enqueue(ctx, "deploy", &certID, nil, map[string]string{"deployment_id": d.ID, "revision_id": revisionID}, key, 3)
 	}
+}
+
+// failedOrActive keeps a certificate active when a previous revision still
+// exists. Earlier code used the transient status (queued/renewing), which made
+// a failed manual reissue hide a perfectly valid certificate and stopped the
+// renewal scheduler from selecting it.
+// renewConfigDrift reports whether the desired configuration differs from the
+// one that produced the current revision. A missing hash means the revision
+// predates this feature, so it is treated as drift and reissued once.
+func (s *Service) renewConfigDrift(ctx context.Context, c *store.Certificate) (bool, error) {
+	if c.CurrentRevisionID == nil {
+		return true, nil
+	}
+	rev, err := s.Store.GetRevision(ctx, *c.CurrentRevisionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	if rev.ConfigHash == "" {
+		return true, nil
+	}
+	hash, err := s.certConfigHash(ctx, c)
+	if err != nil {
+		return false, err
+	}
+	return hash != rev.ConfigHash, nil
+}
+
+func (s *Service) certConfigHash(ctx context.Context, c *store.Certificate) (string, error) {
+	ca, err := s.Store.GetCAAccount(ctx, c.CAAccountID)
+	if err != nil {
+		return "", err
+	}
+	provider := ""
+	if c.DNSCredentialID != nil {
+		cred, err := s.Store.GetDNSCredential(ctx, *c.DNSCredentialID)
+		if err != nil {
+			return "", err
+		}
+		provider = cred.Provider
+	}
+	payload := struct {
+		PrimaryDomain string        `json:"primary_domain"`
+		SAN           []string      `json:"san"`
+		KeyType       string        `json:"key_type"`
+		DirectoryURL  string        `json:"directory_url"`
+		ChallengeType string        `json:"challenge_type"`
+		DNSProvider   string        `json:"dns_provider"`
+		Webroot       *string       `json:"webroot"`
+		Options       store.Options `json:"options"`
+	}{
+		PrimaryDomain: c.PrimaryDomain,
+		SAN:           c.SAN,
+		KeyType:       c.KeyType,
+		DirectoryURL:  ca.DirectoryURL,
+		ChallengeType: c.ChallengeType,
+		DNSProvider:   provider,
+		Webroot:       c.Webroot,
+		Options:       c.Options,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// moveFile renames within a filesystem and falls back to copy+remove when the
+// configured cert directory lives on a different mount than the staging area.
+func moveFile(from, to string) error {
+	if err := os.Rename(from, to); err == nil {
+		return nil
+	} else if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	in, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(to), ".kpccssl-move-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := io.Copy(tmp, in); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, to); err != nil {
+		return err
+	}
+	return os.Remove(from)
+}
+
+func mapCertDomainErr(err error) error {
+	if err != nil && strings.Contains(err.Error(), "certificate primary domain already exists") {
+		return &certificate.ValidationError{
+			Field:   "primary_domain",
+			Message: "a certificate for this primary domain already exists",
+		}
+	}
+	return err
+}
+
+func failedOrActive(c *store.Certificate) string {
+	if c.CurrentRevisionID != nil {
+		return "active"
+	}
+	return "failed"
 }
 
 func deref(s *string) string {

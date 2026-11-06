@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/axmishell/kpccssl/internal/auth"
 	"github.com/axmishell/kpccssl/internal/id"
 	"github.com/axmishell/kpccssl/internal/service"
@@ -167,6 +169,54 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": viewUser(p.User), "csrf_token": p.CSRF})
 }
 
+type stepUpRequest struct {
+	Password     string `json:"password"`
+	TOTPCode     string `json:"totp_code"`
+	RecoveryCode string `json:"recovery_code"`
+}
+
+// stepUp re-authenticates the current session for sensitive operations such as
+// private-key downloads. It issues a short-lived, session-bound token.
+func (s *Server) stepUp(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	var req stepUpRequest
+	if err := decodeJSON(w, r, &req, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if ok, wait := s.Svc.Limiter.Allow("stepup:"+p.User.ID+":"+clientIP(r), 10, 15*time.Minute); !ok {
+		writeProblem(w, r, http.StatusTooManyRequests, "E_RATE_LIMIT", "too many attempts, retry in "+wait.Round(time.Second).String(), nil)
+		return
+	}
+	if !auth.VerifyPassword(p.User.PasswordHash, req.Password) {
+		s.audit(r, "auth.step_up", "user", p.User.ID, "denied", "wrong password")
+		writeProblem(w, r, http.StatusUnauthorized, "E_UNAUTHENTICATED", "password is incorrect", nil)
+		return
+	}
+	if p.User.TOTPSecretEnc != nil {
+		if req.TOTPCode == "" && req.RecoveryCode == "" {
+			writeProblem(w, r, http.StatusUnauthorized, "E_TOTP_REQUIRED", "two-factor code required", nil)
+			return
+		}
+		ok, _, err := s.checkSecondFactor(r, p.User, req.TOTPCode, req.RecoveryCode)
+		if err != nil {
+			writeProblem(w, r, http.StatusInternalServerError, "E_INTERNAL", "cannot verify second factor", nil)
+			return
+		}
+		if !ok {
+			s.audit(r, "auth.step_up", "user", p.User.ID, "denied", "invalid 2fa code")
+			writeProblem(w, r, http.StatusUnauthorized, "E_TOTP_INVALID", "invalid two-factor code", nil)
+			return
+		}
+	}
+	token := s.Auth.IssueStepUp(p, time.Now())
+	s.audit(r, "auth.step_up", "user", p.User.ID, "ok", "")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"step_up_token": token,
+		"expires_in":    int(auth.StepUpTTL / time.Second),
+	})
+}
+
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
@@ -309,6 +359,37 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 		out = append(out, viewUser(&users[i]))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	var in service.UserInput
+	if err := decodeJSON(w, r, &in, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	u, err := s.Svc.CreateUser(r.Context(), in)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "user.create", "user", u.ID, "ok", u.Role)
+	writeJSON(w, http.StatusCreated, viewUser(u))
+}
+
+func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	var in service.UserInput
+	if err := decodeJSON(w, r, &in, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	u, err := s.Svc.UpdateUser(r.Context(), chi.URLParam(r, "id"), p.User.ID, in)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "user.update", "user", u.ID, "ok", "")
+	writeJSON(w, http.StatusOK, viewUser(u))
 }
 
 func serviceErrUnauthorized() error { return service.ErrUnauthorized }

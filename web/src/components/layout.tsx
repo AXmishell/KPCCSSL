@@ -18,7 +18,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTheme } from "@/lib/theme";
+import { readStoredTheme, useTheme, type Theme } from "@/lib/theme";
+import { useInfo } from "@/api/queries";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -40,11 +41,22 @@ export function AppLayout() {
   const { t, i18n } = useTranslation();
   const { user, logout } = useAuth();
   const { theme, setTheme } = useTheme();
+  const { data: info } = useInfo();
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [confirmLogout, setConfirmLogout] = React.useState(false);
   const location = useLocation();
+  const instanceName = info?.instance_name || "KPCCSSL";
 
   React.useEffect(() => setMobileOpen(false), [location.pathname]);
+
+  // Apply the administrator's default only when this browser has no explicit
+  // preference yet.
+  React.useEffect(() => {
+    if (!info?.default_theme || readStoredTheme()) return;
+    if (info.default_theme === "light" || info.default_theme === "dark") {
+      setTheme(info.default_theme as Theme);
+    }
+  }, [info?.default_theme, setTheme]);
 
   const toggleLang = () => {
     const next = i18n.language.startsWith("zh") ? "en" : "zh-CN";
@@ -59,7 +71,7 @@ export function AppLayout() {
       <div className="flex h-16 items-center gap-2 border-b border-border px-5">
         <ShieldCheck className="h-6 w-6 text-primary" />
         <div>
-          <div className="text-sm font-semibold leading-tight">KPCCSSL</div>
+          <div className="text-sm font-semibold leading-tight">{instanceName}</div>
           <div className="text-[11px] text-muted-foreground">{t("tagline")}</div>
         </div>
       </div>

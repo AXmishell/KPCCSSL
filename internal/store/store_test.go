@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,7 +41,7 @@ func TestUsersAndAudit(t *testing.T) {
 	if err := st.InsertAudit(ctx, &AuditLog{ID: "a1", Action: "test", ResourceType: "x", Result: "ok", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	logs, err := st.ListAudit(ctx, 10, 0)
+	logs, err := st.ListAudit(ctx, 10, 0, "")
 	if err != nil || len(logs) != 1 {
 		t.Fatalf("logs=%v err=%v", logs, err)
 	}
@@ -120,6 +121,102 @@ func TestJobClaimAndRetry(t *testing.T) {
 	got, _ := st.GetJob(ctx, "j1")
 	if got.Status != "interrupted" {
 		t.Fatalf("status=%s", got.Status)
+	}
+}
+
+func TestCertificatePrimaryDomainUnique(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	ca := &CAAccount{ID: "ca1", Name: "CA", DirectoryURL: "https://ca/dir", Status: "registered", KeyVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCAAccount(ctx, ca); err != nil {
+		t.Fatal(err)
+	}
+	base := Certificate{Name: "one", PrimaryDomain: "example.com", SAN: []string{"example.com"}, KeyType: "ec-256", CAAccountID: "ca1", ChallengeType: "dns-01", Status: "draft", Version: 1, CreatedAt: now, UpdatedAt: now}
+	first := base
+	first.ID = "c1"
+	if err := st.CreateCertificate(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+	second := base
+	second.ID = "c2"
+	if err := st.CreateCertificate(ctx, &second); err == nil {
+		t.Fatal("duplicate primary domain was accepted")
+	} else if !strings.Contains(err.Error(), "primary domain already exists") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRecoverInterruptedCertificates(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	ca := &CAAccount{ID: "ca1", Name: "CA", DirectoryURL: "https://ca/dir", Status: "registered", KeyVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCAAccount(ctx, ca); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id, domain, status string) *Certificate {
+		c := &Certificate{ID: id, Name: id, PrimaryDomain: domain, SAN: []string{domain}, KeyType: "ec-256", CAAccountID: "ca1", ChallengeType: "dns-01", Status: status, Version: 1, CreatedAt: now, UpdatedAt: now}
+		if err := st.CreateCertificate(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	broken := mk("c1", "broken.example.com", "issuing")
+	active := mk("c2", "active.example.com", "renewing")
+	queued := mk("c3", "queued.example.com", "queued")
+
+	rev := &Revision{ID: "r1", CertificateID: active.ID, Serial: "aa", FingerprintSHA256: "bb", NotBefore: now, NotAfter: now + 86400,
+		CertPath: "/tmp/cert", KeyPath: "/tmp/key", ChainPath: "/tmp/chain", FullchainPath: "/tmp/full", IssuedAt: now, CreatedAt: now}
+	if err := st.ActivateRevision(ctx, active.ID, rev, now+3600, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetCertificateStatus(ctx, active.ID, "renewing", nil, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	// A queued job means the worker still owns the transition.
+	if _, err := st.CreateJob(ctx, &Job{ID: "j1", Type: "issue", CertificateID: &queued.ID, Status: "queued", MaxAttempts: 3, PayloadJSON: "{}", CreatedAt: now, AvailableAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := st.RecoverInterruptedCertificates(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("recovered %v", ids)
+	}
+	gotBroken, _ := st.GetCertificate(ctx, broken.ID)
+	if gotBroken.Status != "failed" {
+		t.Fatalf("broken status = %s", gotBroken.Status)
+	}
+	gotActive, _ := st.GetCertificate(ctx, active.ID)
+	if gotActive.Status != "active" {
+		t.Fatalf("active status = %s", gotActive.Status)
+	}
+	gotQueued, _ := st.GetCertificate(ctx, queued.ID)
+	if gotQueued.Status != "queued" {
+		t.Fatalf("queued status = %s", gotQueued.Status)
+	}
+}
+
+func TestActiveJobUniqueIndex(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	ca := &CAAccount{ID: "ca1", Name: "CA", DirectoryURL: "https://ca/dir", Status: "registered", KeyVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCAAccount(ctx, ca); err != nil {
+		t.Fatal(err)
+	}
+	c := &Certificate{ID: "c1", Name: "cert", PrimaryDomain: "example.com", SAN: []string{"example.com"}, KeyType: "ec-256", CAAccountID: "ca1", ChallengeType: "dns-01", Status: "draft", Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateCertificate(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	j1 := &Job{ID: "j1", Type: "issue", CertificateID: &c.ID, Status: "queued", MaxAttempts: 3, PayloadJSON: "{}", CreatedAt: now, AvailableAt: now}
+	created, err := st.CreateJob(ctx, j1)
+	if err != nil || !created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	j2 := &Job{ID: "j2", Type: "issue", CertificateID: &c.ID, Status: "queued", MaxAttempts: 3, PayloadJSON: "{}", CreatedAt: now, AvailableAt: now}
+	created, err = st.CreateJob(ctx, j2)
+	if err != nil || created || j2.ID != "j1" {
+		t.Fatalf("created=%v err=%v id=%s", created, err, j2.ID)
 	}
 }
 

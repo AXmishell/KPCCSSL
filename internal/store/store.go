@@ -53,6 +53,9 @@ func (s *Store) DB() *sql.DB { return s.db }
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// Ping verifies the database connection is usable.
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
 // Migrate applies all embedded migrations.
 func (s *Store) Migrate(ctx context.Context) error {
 	goose.SetBaseFS(migrations.FS)

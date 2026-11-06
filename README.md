@@ -18,7 +18,8 @@ KPCCSSL 面向希望自己掌控证书生命周期的团队：在同一个界面
 - **自动化**：持久化任务队列、幂等键、重试退避、SSE 实时日志、启动对账、每日错峰续期、失败保留旧证书。
 - **部署**：本地文件（白名单 + 原子写 + 备份）、固定 reload 模板、HTTPS Webhook。
 - **通知**：SMTP、Webhook、Telegram，支持事件订阅、去重与重试。
-- **安全**：Argon2id、HttpOnly 会话、CSRF 防护、RBAC、可选 TOTP、全量脱敏日志与审计。
+- **安全**：Argon2id、HttpOnly 会话、CSRF 防护、RBAC + 用户管理、可选 TOTP、私钥下载 step-up 二次认证、全量脱敏日志与审计。
+- **运维**：readiness、Prometheus 文本指标、主密钥版本轮换、acme.sh 校验和固定、崩溃后证书状态自动修复。
 - **界面**：React 19 + Tailwind，支持中文/英文与浅色/深色主题。
 
 ## 技术栈

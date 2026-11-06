@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/axmishell/kpccssl/internal/store"
 )
@@ -34,6 +35,41 @@ func (s *Service) GetSetting(ctx context.Context, key string) (any, error) {
 		_ = json.Unmarshal([]byte(*vj), &out)
 	}
 	return out, nil
+}
+
+// SettingInt returns an integer setting or fallback when absent/invalid.
+func (s *Service) SettingInt(ctx context.Context, key string, fallback int) int {
+	v, err := s.GetSetting(ctx, key)
+	if err != nil || v == nil {
+		return fallback
+	}
+	switch n := v.(type) {
+	case float64:
+		if n > 0 {
+			return int(n)
+		}
+	case int:
+		if n > 0 {
+			return n
+		}
+	case string:
+		if parsed, err := strconv.Atoi(n); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+// SettingString returns a string setting or fallback when absent.
+func (s *Service) SettingString(ctx context.Context, key, fallback string) string {
+	v, err := s.GetSetting(ctx, key)
+	if err != nil || v == nil {
+		return fallback
+	}
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return fallback
 }
 
 // SetSetting stores a JSON value, encrypting it when secret is true.

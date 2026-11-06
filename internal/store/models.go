@@ -97,6 +97,7 @@ type Revision struct {
 	KeyPath           string `json:"-"`
 	ChainPath         string `json:"-"`
 	FullchainPath     string `json:"-"`
+	ConfigHash        string `json:"-"`
 	IssuedAt          int64  `json:"issued_at"`
 	RevokedAt         *int64 `json:"revoked_at"`
 	RevokeReason      *int64 `json:"revoke_reason"`

@@ -42,7 +42,15 @@ export function CertificateDetailPage() {
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [pfxOpen, setPfxOpen] = React.useState(false);
   const [deployOpen, setDeployOpen] = React.useState(false);
+  const [stepUpOpen, setStepUpOpen] = React.useState(false);
+  const [stepUpAction, setStepUpAction] = React.useState<((token: string) => void | Promise<void>) | null>(null);
   const [busy, setBusy] = React.useState("");
+  const pfxToken = React.useRef("");
+
+  const requireStepUp = (action: (token: string) => void | Promise<void>) => {
+    setStepUpAction(() => action);
+    setStepUpOpen(true);
+  };
 
   const cert = data?.certificate;
   const canEdit = user?.role === "admin" || user?.role === "operator";
@@ -229,22 +237,33 @@ export function CertificateDetailPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={async () => {
+                        onClick={() => {
                           if (!window.confirm(t("cert.privateKeyConfirm"))) return;
-                          try {
-                            await download(`/certificates/${id}/download?format=zip`, undefined, {
-                              headers: { "X-Confirm-Private-Key": "yes" },
-                            });
-                          } catch (err) {
-                            toast.error(errorMessage(err));
-                          }
+                          requireStepUp(async (token) => {
+                            try {
+                              await download(`/certificates/${id}/download?format=zip`, undefined, {
+                                headers: { "X-Step-Up-Token": token },
+                              });
+                            } catch (err) {
+                              toast.error(errorMessage(err));
+                            }
+                          });
                         }}
                       >
                         <FileDown className="h-3.5 w-3.5" /> ZIP
                       </Button>
                     )}
                     {canEdit && (
-                      <Button size="sm" variant="outline" onClick={() => setPfxOpen(true)}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          requireStepUp((token) => {
+                            pfxToken.current = token;
+                            setPfxOpen(true);
+                          })
+                        }
+                      >
                         PFX
                       </Button>
                     )}
@@ -252,15 +271,17 @@ export function CertificateDetailPage() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={async () => {
+                        onClick={() => {
                           if (!window.confirm(t("cert.privateKeyConfirm"))) return;
-                          try {
-                            await download(`/certificates/${id}/download?format=pem&key=true`, undefined, {
-                              headers: { "X-Confirm-Private-Key": "yes" },
-                            });
-                          } catch (err) {
-                            toast.error(errorMessage(err));
-                          }
+                          requireStepUp(async (token) => {
+                            try {
+                              await download(`/certificates/${id}/download?format=pem&key=true`, undefined, {
+                                headers: { "X-Step-Up-Token": token },
+                              });
+                            } catch (err) {
+                              toast.error(errorMessage(err));
+                            }
+                          });
                         }}
                       >
                         <KeyRound className="h-3.5 w-3.5" /> {t("cert.privateKey")}
@@ -301,15 +322,17 @@ export function CertificateDetailPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={async () => {
+                      onClick={() => {
                         if (!window.confirm(t("cert.privateKeyConfirm"))) return;
-                        try {
-                          await download(`/certificates/${id}/download?format=zip&revision=${rev.id}`, undefined, {
-                            headers: { "X-Confirm-Private-Key": "yes" },
-                          });
-                        } catch (err) {
-                          toast.error(errorMessage(err));
-                        }
+                        requireStepUp(async (token) => {
+                          try {
+                            await download(`/certificates/${id}/download?format=zip&revision=${rev.id}`, undefined, {
+                              headers: { "X-Step-Up-Token": token },
+                            });
+                          } catch (err) {
+                            toast.error(errorMessage(err));
+                          }
+                        });
                       }}
                     >
                       ZIP
@@ -457,13 +480,28 @@ export function CertificateDetailPage() {
         try {
           await download(`/certificates/${id}/download?format=pfx`, { password }, {
             method: "POST",
-            headers: { "X-Confirm-Private-Key": "yes" },
+            headers: { "X-Step-Up-Token": pfxToken.current },
           });
           setPfxOpen(false);
         } catch (err) {
           toast.error(errorMessage(err));
         }
       }} />
+
+      <StepUpDialog
+        open={stepUpOpen}
+        onOpenChange={setStepUpOpen}
+        onSubmit={async (password, totp) => {
+          const res = await request<{ step_up_token: string }>("/me/step-up", {
+            method: "POST",
+            body: { password, totp_code: totp || "" },
+          });
+          const action = stepUpAction;
+          setStepUpOpen(false);
+          setStepUpAction(null);
+          if (action) await action(res.step_up_token);
+        }}
+      />
 
       <DeploymentDialog open={deployOpen} onOpenChange={setDeployOpen} certId={id} onCreated={() => {
         setDeployOpen(false);
@@ -535,6 +573,60 @@ function PfxDialog({ open, onOpenChange, onSubmit }: { open: boolean; onOpenChan
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
           <Button disabled={password.length < 8} onClick={() => onSubmit(password)}>{t("common.download")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function StepUpDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onSubmit: (password: string, totp: string) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const [password, setPassword] = React.useState("");
+  const [totp, setTotp] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("auth.stepUpTitle")}</DialogTitle>
+          <DialogDescription>{t("auth.stepUpHint")}</DialogDescription>
+        </DialogHeader>
+        <Field label={t("auth.password")}>
+          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+        </Field>
+        {user?.totp_enabled && (
+          <Field label={t("auth.totpCode")}>
+            <Input value={totp} onChange={(e) => setTotp(e.target.value)} inputMode="numeric" />
+          </Field>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
+          <Button
+            disabled={busy || !password}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await onSubmit(password, totp);
+                setPassword("");
+                setTotp("");
+              } catch (err) {
+                toast.error(errorMessage(err));
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {t("auth.reauthenticate")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

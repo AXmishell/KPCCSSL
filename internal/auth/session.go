@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/axmishell/kpccssl/internal/id"
@@ -14,6 +16,12 @@ import (
 
 // SessionTTL is the sliding session lifetime.
 const SessionTTL = 12 * time.Hour
+
+// SessionAbsoluteTTL caps how long a session can be extended by activity.
+const SessionAbsoluteTTL = 7 * 24 * time.Hour
+
+// StepUpTTL is the lifetime of a private-key re-authentication grant.
+const StepUpTTL = 5 * time.Minute
 
 // Principal is the authenticated request identity.
 type Principal struct {
@@ -75,7 +83,7 @@ func (m *Manager) Resolve(ctx context.Context, token string) (*Principal, error)
 		return nil, err
 	}
 	now := store.Now()
-	if sess.ExpiresAt < now {
+	if sess.ExpiresAt < now || now-sess.CreatedAt > int64(SessionAbsoluteTTL/time.Second) {
 		_ = m.Store.DeleteSession(ctx, sess.ID)
 		return nil, store.ErrNotFound
 	}
@@ -108,6 +116,41 @@ func (m *Manager) VerifyCSRF(p *Principal, submitted string) bool {
 		return false
 	}
 	return hmac.Equal([]byte(submitted), []byte(csrfToken(p.Session)))
+}
+
+// IssueStepUp returns a short-lived token bound to the current session. It is
+// used for operations such as private-key download that need a fresh proof of
+// identity without rotating the session cookie.
+func (m *Manager) IssueStepUp(p *Principal, now time.Time) string {
+	expiry := now.Add(StepUpTTL).Unix()
+	sum := stepUpMAC(p.Session.CSRFSecret, p.Session.ID, expiry)
+	return strconv.FormatInt(expiry, 10) + "." + base64.RawURLEncoding.EncodeToString(sum)
+}
+
+// VerifyStepUp validates a token produced by IssueStepUp for this session.
+func (m *Manager) VerifyStepUp(p *Principal, token string, now time.Time) bool {
+	if p == nil || p.Session == nil || token == "" {
+		return false
+	}
+	expiryRaw, sigRaw, ok := strings.Cut(token, ".")
+	if !ok {
+		return false
+	}
+	expiry, err := strconv.ParseInt(expiryRaw, 10, 64)
+	if err != nil || expiry < now.Unix() {
+		return false
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(sigRaw)
+	if err != nil {
+		return false
+	}
+	return hmac.Equal(sig, stepUpMAC(p.Session.CSRFSecret, p.Session.ID, expiry))
+}
+
+func stepUpMAC(secret, sessionID string, expiry int64) []byte {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("stepup:" + sessionID + ":" + strconv.FormatInt(expiry, 10)))
+	return mac.Sum(nil)
 }
 
 func csrfToken(sess *store.Session) string {

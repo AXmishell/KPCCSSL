@@ -20,6 +20,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Readiness probe (database, data directory and acme.sh binary). Also exposes Prometheus text metrics at the unprefixed `/metrics` endpoint. */
+        get: operations["ready"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/setup": {
         parameters: {
             query?: never;
@@ -76,6 +93,103 @@ export interface paths {
             cookie?: never;
         };
         get: operations["me"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/step-up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Re-authenticate the current session for private-key downloads. Returns a short-lived, session-bound token. */
+        post: operations["stepUp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/totp/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["totpSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/totp/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["totpEnable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/totp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["totpDisable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["dashboard"];
         put?: never;
         post?: never;
         delete?: never;
@@ -182,6 +296,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/certificates/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCertificateEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/certificates/{id}/download": {
         parameters: {
             query?: never;
@@ -246,6 +376,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retryJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["downloadJobLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ca-accounts": {
         parameters: {
             query?: never;
@@ -262,6 +440,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ca-accounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteCAAccount"];
+        options?: never;
+        head?: never;
+        patch: operations["updateCAAccount"];
+        trace?: never;
+    };
     "/ca-accounts/{id}/register": {
         parameters: {
             query?: never;
@@ -272,6 +468,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["registerCAAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ca-accounts/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["disableCAAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ca-accounts/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["enableCAAccount"];
         delete?: never;
         options?: never;
         head?: never;
@@ -310,6 +538,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/dns-credentials/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteDNSCredential"];
+        options?: never;
+        head?: never;
+        patch: operations["updateDNSCredential"];
+        trace?: never;
+    };
+    "/dns-credentials/{id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Local decryption/field validation; not a live provider API call. */
+        post: operations["verifyDNSCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/deployments": {
         parameters: {
             query?: never;
@@ -326,6 +589,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/deployments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteDeployment"];
+        options?: never;
+        head?: never;
+        patch: operations["updateDeployment"];
+        trace?: never;
+    };
     "/notification-channels": {
         parameters: {
             query?: never;
@@ -340,6 +621,72 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/notification-channels/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteNotificationChannel"];
+        options?: never;
+        head?: never;
+        patch: operations["updateNotificationChannel"];
+        trace?: never;
+    };
+    "/notification-channels/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testNotificationChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUsers"];
+        put?: never;
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateUser"];
         trace?: never;
     };
     "/audit-logs": {
@@ -446,8 +793,23 @@ export interface components {
             challenge_type: string;
             dns_credential_id?: string;
             webroot?: string;
+            options?: {
+                preferred_chain?: string;
+                dns_alias?: string;
+                dns_sleep?: number;
+                always_new_key?: boolean;
+                must_staple?: boolean;
+            };
             auto_renew?: boolean;
             version?: number;
+        };
+        CertificateEvent: {
+            id?: number;
+            certificate_id?: string;
+            type?: string;
+            message?: string | null;
+            job_id?: string | null;
+            created_at?: number;
         };
         Revision: {
             id?: string;
@@ -593,6 +955,8 @@ export interface components {
     };
     parameters: {
         IdempotencyKey: string;
+        /** @description Short-lived token returned by POST /me/step-up. */
+        StepUpToken: string;
     };
     requestBodies: never;
     headers: never;
@@ -622,6 +986,29 @@ export interface operations {
                     };
                 };
             };
+        };
+    };
+    ready: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        status?: string;
+                    };
+                };
+            };
+            503: components["responses"]["Problem"];
         };
     };
     setup: {
@@ -698,13 +1085,178 @@ export interface operations {
             200: components["responses"]["AuthResult"];
         };
     };
+    stepUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    password: string;
+                    totp_code?: string;
+                    recovery_code?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Step-up grant */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        step_up_token?: string;
+                        expires_in?: number;
+                    };
+                };
+            };
+            401: components["responses"]["Problem"];
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    current_password: string;
+                    new_password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Password changed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Problem"];
+        };
+    };
+    totpSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description New TOTP secret and otpauth URI */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        secret?: string;
+                        uri?: string;
+                    };
+                };
+            };
+        };
+    };
+    totpEnable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    secret: string;
+                    code: string;
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Recovery codes (shown once) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        recovery_codes?: string[];
+                    };
+                };
+            };
+        };
+    };
+    totpDisable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    password: string;
+                    code?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Disabled */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    dashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dashboard counters */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        certificates?: {
+                            [key: string]: number;
+                        };
+                        jobs?: {
+                            [key: string]: number;
+                        };
+                        recent_jobs?: components["schemas"]["Job"][];
+                    };
+                };
+            };
+        };
+    };
     listCertificates: {
         parameters: {
             query?: {
                 status?: string;
                 q?: string;
                 limit?: number;
-                cursor?: number;
+                /** @description Composite `<created_at>:<id>` cursor or legacy integer. */
+                cursor?: string | number;
             };
             header?: never;
             path?: never;
@@ -720,7 +1272,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         items?: components["schemas"]["Certificate"][];
-                        next_cursor?: number | null;
+                        /** @description Composite `<created_at>:<id>` cursor (the legacy integer form is also accepted). */
+                        next_cursor?: string | number | null;
                     };
                 };
             };
@@ -895,17 +1448,44 @@ export interface operations {
             };
         };
     };
+    listCertificateEvents: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Certificate timeline */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["CertificateEvent"][];
+                    };
+                };
+            };
+        };
+    };
     downloadCertificate: {
         parameters: {
             query?: {
-                /** @description ZIP contains the private key; requires operator role and X-Confirm-Private-Key: yes */
+                /** @description ZIP contains the private key and requires a step-up grant */
                 format?: "pem" | "zip";
                 revision?: string;
-                /** @description Requires operator role and X-Confirm-Private-Key: yes */
+                /** @description Include the private key; requires a step-up grant */
                 key?: boolean;
             };
             header?: {
-                "X-Confirm-Private-Key"?: "yes";
+                /** @description Short-lived token returned by POST /me/step-up. */
+                "X-Step-Up-Token"?: components["parameters"]["StepUpToken"];
             };
             path: {
                 id: string;
@@ -921,12 +1501,16 @@ export interface operations {
                 };
                 content?: never;
             };
+            428: components["responses"]["Problem"];
         };
     };
     exportPFX: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Short-lived token returned by POST /me/step-up. */
+                "X-Step-Up-Token"?: components["parameters"]["StepUpToken"];
+            };
             path: {
                 id: string;
             };
@@ -948,6 +1532,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            428: components["responses"]["Problem"];
         };
     };
     listJobs: {
@@ -1023,6 +1608,70 @@ export interface operations {
             };
         };
     };
+    cancelJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canceled */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Problem"];
+        };
+    };
+    retryJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Re-queued */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Problem"];
+        };
+    };
+    downloadJobLog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Raw job log (admin only) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
     listCAAccounts: {
         parameters: {
             query?: never;
@@ -1075,6 +1724,53 @@ export interface operations {
             };
         };
     };
+    deleteCAAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateCAAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CAInput"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CAAccount"];
+                };
+            };
+        };
+    };
     registerCAAccount: {
         parameters: {
             query?: never;
@@ -1089,6 +1785,50 @@ export interface operations {
         requestBody?: never;
         responses: {
             202: components["responses"]["Accepted"];
+        };
+    };
+    disableCAAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disabled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CAAccount"];
+                };
+            };
+        };
+    };
+    enableCAAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enabled (registration required again) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CAAccount"];
+                };
+            };
         };
     };
     listDNSProviders: {
@@ -1165,6 +1905,82 @@ export interface operations {
             };
         };
     };
+    deleteDNSCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateDNSCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    provider?: string;
+                    config?: {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSCredential"];
+                };
+            };
+        };
+    };
+    verifyDNSCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSCredential"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
     listDeployments: {
         parameters: {
             query?: {
@@ -1213,6 +2029,52 @@ export interface operations {
             };
         };
     };
+    deleteDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentInput"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Deployment"];
+                };
+            };
+        };
+    };
     listNotificationChannels: {
         parameters: {
             query?: never;
@@ -1232,6 +2094,163 @@ export interface operations {
                         items?: components["schemas"]["NotificationChannel"][];
                         events?: string[];
                     };
+                };
+            };
+        };
+    };
+    deleteNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    type?: string;
+                    config?: {
+                        [key: string]: unknown;
+                    };
+                    events?: string[];
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"];
+                };
+            };
+        };
+    };
+    testNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Test message sent */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            502: components["responses"]["Problem"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Users */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["User"][];
+                    };
+                };
+            };
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    email: string;
+                    password: string;
+                    /** @enum {string} */
+                    role: "admin" | "operator" | "viewer";
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    role?: "admin" | "operator" | "viewer";
+                    disabled?: boolean;
+                    password?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
                 };
             };
         };
@@ -1331,6 +2350,11 @@ export interface operations {
                         disk_free_bytes?: number;
                         server_time?: number;
                         fake_acme?: boolean;
+                        instance_name?: string;
+                        default_ca_id?: string;
+                        /** @enum {string} */
+                        default_theme?: "light" | "dark";
+                        renewal_notice_days?: number;
                     };
                 };
             };

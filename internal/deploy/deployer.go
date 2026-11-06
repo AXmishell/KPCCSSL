@@ -58,6 +58,16 @@ type Deployer struct {
 	Client    *http.Client
 }
 
+// SafeTransport is an HTTP transport that rejects private/loopback targets at
+// dial time. Exported so notification webhooks use the same DNS-rebinding
+// protection as certificate deployments.
+func SafeTransport() *http.Transport {
+	return &http.Transport{
+		DialContext:  safeDialer(10 * time.Second),
+		MaxIdleConns: 10,
+	}
+}
+
 // New creates a deployer. allowDirs are absolute roots permitted for local
 // file deployment.
 func New(st *store.Store, box *secret.Box, allowDirs []string) *Deployer {
@@ -66,13 +76,8 @@ func New(st *store.Store, box *secret.Box, allowDirs []string) *Deployer {
 		Box:       box,
 		AllowDirs: allowDirs,
 		Client: &http.Client{
-			Timeout: 20 * time.Second,
-			Transport: &http.Transport{
-				DialContext: safeDialer(10 * time.Second),
-				// Redirects are followed only via the same safe transport, but
-				// limit them to avoid loops.
-				MaxIdleConns: 10,
-			},
+			Timeout:   20 * time.Second,
+			Transport: SafeTransport(),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 3 {
 					return errors.New("too many redirects")
@@ -407,7 +412,37 @@ func safeJoin(root, name string) (string, error) {
 	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
 		return "", errors.New("file name escapes directory")
 	}
-	return filepath.Join(root, clean), nil
+	dst := filepath.Join(root, clean)
+	// Resolve the parent directory, not just the configured root. Without this
+	// a symlinked subdirectory inside the allow-list can redirect the atomic
+	// write to an arbitrary path outside it.
+	parent, err := filepath.EvalSymlinks(filepath.Dir(dst))
+	if err != nil {
+		return "", fmt.Errorf("destination directory must exist: %w", err)
+	}
+	info, err := os.Stat(parent)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("destination directory is not a directory")
+	}
+	if !withinDir(root, parent) {
+		return "", errors.New("file destination escapes directory")
+	}
+	resolved := filepath.Join(parent, filepath.Base(dst))
+	if link, err := os.Lstat(resolved); err == nil && link.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("file destination must not be a symlink")
+	}
+	return resolved, nil
+}
+
+func withinDir(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func parseMode(s string) (os.FileMode, error) {
