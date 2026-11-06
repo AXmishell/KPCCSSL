@@ -115,6 +115,11 @@ export function LoginPage() {
                   {useRecovery ? t("auth.useTOTP") : t("auth.useRecovery")}
                 </button>
               )}
+              <div className="text-right">
+                <Link to="/forgot-password" className="text-xs text-muted-foreground underline-offset-2 hover:underline">
+                  {t("auth.forgotPassword")}
+                </Link>
+              </div>
               <Button type="submit" className="w-full" disabled={busy}>
                 {busy ? t("common.loading") : t("auth.login")}
               </Button>

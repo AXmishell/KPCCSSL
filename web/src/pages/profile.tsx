@@ -1,10 +1,10 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Copy, KeyRound, ShieldCheck } from "lucide-react";
+import { Copy, KeyRound, Mail, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/auth";
 import { useAction } from "@/api/queries";
-import { errorMessage, request } from "@/api/client";
+import { ApiError, errorMessage, request } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ export function ProfilePage() {
   const [busy, setBusy] = React.useState(false);
   const [setupOpen, setSetupOpen] = React.useState(false);
   const [disableOpen, setDisableOpen] = React.useState(false);
+  const [emailOpen, setEmailOpen] = React.useState(false);
 
   const changePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,7 +57,12 @@ export function ProfilePage() {
             <p className="text-sm text-muted-foreground">{t("auth.email")}</p>
             <p className="font-medium">{user.email}</p>
           </div>
-          <Badge variant="outline">{user.role}</Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">{user.role}</Badge>
+            <Button size="sm" variant="outline" onClick={() => setEmailOpen(true)}>
+              <Mail className="h-4 w-4" /> {t("profile.changeEmail")}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -118,7 +124,78 @@ export function ProfilePage() {
         await refresh();
         setDisableOpen(false);
       }} />
+      <ChangeEmailDialog open={emailOpen} onOpenChange={setEmailOpen} />
     </div>
+  );
+}
+
+function ChangeEmailDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { t } = useTranslation();
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setEmail("");
+    setPassword("");
+    setError("");
+  }, [open]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await request("/me/email", { method: "POST", body: { email, password } });
+      toast.success(t("profile.emailChangeSent"));
+      onOpenChange(false);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "E_MAIL_NOT_CONFIGURED") {
+        setError(t("auth.mailNotConfigured"));
+      } else if (err instanceof ApiError && err.code === "E_UNAUTHENTICATED") {
+        setError(t("profile.wrongPassword"));
+      } else {
+        setError(errorMessage(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("profile.changeEmail")}</DialogTitle>
+          <DialogDescription>{t("profile.changeEmailHint")}</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={submit}>
+          {error && <ErrorBox message={error} />}
+          <Field label={t("profile.newEmail")}>
+            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </Field>
+          <Field label={t("auth.currentPassword")}>
+            <Input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </Field>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={busy || !email || !password}>
+              {t("profile.sendVerification")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

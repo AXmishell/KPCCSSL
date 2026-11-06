@@ -78,6 +78,66 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/AuthResult" }
         "401": { $ref: "#/components/responses/Problem" }
+  /auth/forgot-password:
+    post:
+      security: []
+      operationId: forgotPassword
+      description: Sends a reset link when the account exists. The response is the same for unknown accounts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "204": { description: Request accepted }
+        "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /auth/reset-password:
+    post:
+      security: []
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 12 }
+      responses:
+        "204": { description: Password reset; all sessions were signed out }
+        "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /auth/confirm-email:
+    post:
+      security: []
+      operationId: confirmEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Email changed; all sessions were signed out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  email: { type: string }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /auth/logout:
     post:
       operationId: logout
@@ -130,6 +190,26 @@ paths:
       responses:
         "204": { description: Password changed }
         "401": { $ref: "#/components/responses/Problem" }
+  /me/email:
+    post:
+      operationId: requestEmailChange
+      description: Sends a verification link to the new address. The change applies only after confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "204": { description: Verification email sent }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /me/totp/setup:
     post:
       operationId: totpSetup
@@ -860,6 +940,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
+  /users/{id}/password-reset:
+    post:
+      operationId: adminSendPasswordReset
+      description: Sends a password reset link to the user's registered address.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Reset email sent }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /workflows:
     get:
       operationId: listWorkflows
@@ -1020,6 +1111,22 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+  /settings/mail-test:
+    post:
+      operationId: testMail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to: { type: string, format: email }
+      responses:
+        "204": { description: Test email sent }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /system/info:
     get:
       operationId: systemInfo

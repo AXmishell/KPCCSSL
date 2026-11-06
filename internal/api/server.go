@@ -61,6 +61,9 @@ func (s *Server) routes() http.Handler {
 		api.Get("/system/ready", s.ready)
 		api.Post("/setup", s.setup)
 		api.Post("/auth/login", s.login)
+		api.Post("/auth/forgot-password", s.forgotPassword)
+		api.Post("/auth/reset-password", s.resetPassword)
+		api.Post("/auth/confirm-email", s.confirmEmail)
 		api.Group(func(pub chi.Router) {
 			pub.Use(s.csrfGuard)
 			pub.Use(s.requireAuth)
@@ -73,6 +76,7 @@ func (s *Server) routes() http.Handler {
 			pr.Get("/me", s.me)
 			pr.Post("/me/step-up", s.stepUp)
 			pr.Post("/me/password", s.changePassword)
+			pr.Post("/me/email", s.requestEmailChange)
 			pr.Post("/me/totp/setup", s.totpSetup)
 			pr.Post("/me/totp/enable", s.totpEnable)
 			pr.Post("/me/totp/disable", s.totpDisable)
@@ -129,11 +133,13 @@ func (s *Server) routes() http.Handler {
 			admin.Post("/deployment-credentials/{id}/test", s.testDeploymentCredential)
 			admin.Patch("/settings", s.patchSettings)
 			admin.Get("/settings", s.getSettings)
+			admin.Post("/settings/mail-test", s.testMail)
 			admin.Get("/audit-logs", s.listAudit)
 			admin.Get("/jobs/{id}/log", s.downloadJobLog)
 			admin.Get("/users", s.listUsers)
 			admin.Post("/users", s.createUser)
 			admin.Patch("/users/{id}", s.updateUser)
+			admin.Post("/users/{id}/password-reset", s.adminResetPassword)
 			admin.Post("/workflows", s.createWorkflow)
 			admin.Patch("/workflows/{id}", s.updateWorkflow)
 			admin.Delete("/workflows/{id}", s.deleteWorkflow)
@@ -387,6 +393,22 @@ func requestID(r *http.Request) string {
 func clientIP(r *http.Request) string {
 	v, _ := r.Context().Value(ctxIP).(string)
 	return v
+}
+
+// publicBaseURL builds the absolute origin used in emailed links. A configured
+// base_url wins; otherwise the request host is used. X-Forwarded-Proto is only
+// trusted from a configured reverse proxy.
+func (s *Server) publicBaseURL(r *http.Request) string {
+	if s.Cfg.BaseURL != "" {
+		return strings.TrimRight(s.Cfg.BaseURL, "/")
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	} else if s.Cfg.IsTrustedProxy(remoteIP(r)) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
 
 func principal(r *http.Request) *auth.Principal {

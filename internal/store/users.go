@@ -66,6 +66,12 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id, hash string, now int
 	return err
 }
 
+// UpdateUserEmail changes the login address after it has been verified.
+func (s *Store) UpdateUserEmail(ctx context.Context, id, email string, now int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET email=?, updated_at=? WHERE id=?`, email, now, id)
+	return err
+}
+
 // SetUserTOTP stores (or clears) the encrypted TOTP secret.
 func (s *Store) SetUserTOTP(ctx context.Context, id string, enc *string, now int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE users SET totp_secret_enc=?, updated_at=? WHERE id=?`, enc, now, id)

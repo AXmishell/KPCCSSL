@@ -69,6 +69,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/forgot-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Sends a reset link when the account exists. The response is the same for unknown accounts. */
+        post: operations["forgotPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resetPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/confirm-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["confirmEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/logout": {
         parameters: {
             query?: never;
@@ -128,6 +177,23 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Sends a verification link to the new address. The change applies only after confirmation. */
+        post: operations["requestEmailChange"];
         delete?: never;
         options?: never;
         head?: never;
@@ -607,6 +673,108 @@ export interface paths {
         patch: operations["updateDeployment"];
         trace?: never;
     };
+    "/deployments/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testDeploymentConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/deployments/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testDeployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/deployment-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listDeploymentCredentials"];
+        put?: never;
+        post: operations["createDeploymentCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/deployment-credentials/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteDeploymentCredential"];
+        options?: never;
+        head?: never;
+        patch: operations["updateDeploymentCredential"];
+        trace?: never;
+    };
+    "/deployment-credentials/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testDeploymentCredentialConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/deployment-credentials/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testDeploymentCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notification-channels": {
         parameters: {
             query?: never;
@@ -687,6 +855,23 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/users/{id}/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Sends a password reset link to the user's registered address. */
+        post: operations["adminSendPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/workflows": {
@@ -833,6 +1018,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["updateSettings"];
+        trace?: never;
+    };
+    "/settings/mail-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testMail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/system/info": {
@@ -997,7 +1198,8 @@ export interface components {
             certificate_id?: string;
             name?: string;
             /** @enum {string} */
-            type?: "local_file" | "reload" | "webhook";
+            type?: "local_file" | "reload" | "webhook" | "ssh" | "baota_panel" | "baota_site" | "1panel_panel" | "1panel_site" | "tencent_cdn" | "tencent_waf" | "tencent_cos" | "tencent_teo" | "aliyun_cdn" | "aliyun_waf" | "aliyun_oss" | "aliyun_dcdn" | "qiniu_cdn";
+            credential_id?: string | null;
             enabled?: boolean;
             last_run_at?: number | null;
             last_status?: string | null;
@@ -1006,17 +1208,37 @@ export interface components {
             certificate_id: string;
             name: string;
             /** @enum {string} */
-            type: "local_file" | "reload" | "webhook";
+            type: "local_file" | "reload" | "webhook" | "ssh" | "baota_panel" | "baota_site" | "1panel_panel" | "1panel_site" | "tencent_cdn" | "tencent_waf" | "tencent_cos" | "tencent_teo" | "aliyun_cdn" | "aliyun_waf" | "aliyun_oss" | "aliyun_dcdn" | "qiniu_cdn";
             config: {
                 [key: string]: unknown;
             };
             enabled?: boolean;
         };
+        DeploymentCredential: {
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            type?: "tencent" | "aliyun" | "qiniu" | "baota" | "1panel" | "ssh";
+            configured_fields?: string[];
+            public_config?: {
+                [key: string]: unknown;
+            };
+            created_at?: number;
+            updated_at?: number;
+        };
+        DeploymentCredentialInput: {
+            name: string;
+            /** @enum {string} */
+            type: "tencent" | "aliyun" | "qiniu" | "baota" | "1panel" | "ssh";
+            config: {
+                [key: string]: unknown;
+            };
+        };
         NotificationChannel: {
             id?: string;
             name?: string;
             /** @enum {string} */
-            type?: "smtp" | "webhook" | "telegram";
+            type?: "smtp" | "webhook" | "telegram" | "feishu" | "dingtalk" | "wecom";
             events?: string[];
             enabled?: boolean;
         };
@@ -1063,10 +1285,13 @@ export interface components {
             nodes?: components["schemas"]["WorkflowNode"][];
             /** @description v2 graph edges. */
             edges?: components["schemas"]["WorkflowEdge"][];
+            /** @description Allow more than one root node. False by default so an unconnected node cannot become an accidental start node. */
+            allow_multiple_starts?: boolean;
         };
         WorkflowInput: {
             name: string;
             description?: string;
+            /** @description Defaults to true on create; omitted on update preserves the current value. */
             enabled?: boolean;
             /** @enum {string} */
             trigger_type?: "manual" | "schedule";
@@ -1113,6 +1338,8 @@ export interface components {
             error?: string | null;
             started_at?: number | null;
             finished_at?: number | null;
+            /** @description Unix time after which a pending step may be retried. */
+            available_at?: number;
         };
         WorkflowRunDetail: {
             run?: components["schemas"]["WorkflowRun"];
@@ -1268,6 +1495,90 @@ export interface operations {
             401: components["responses"]["Problem"];
         };
     };
+    forgotPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: email */
+                    email: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Request accepted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+        };
+    };
+    resetPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    token: string;
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Password reset; all sessions were signed out */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+        };
+    };
+    confirmEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    token: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Email changed; all sessions were signed out */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        email?: string;
+                    };
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
     logout: {
         parameters: {
             query?: never;
@@ -1354,6 +1665,36 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Problem"];
+        };
+    };
+    requestEmailChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: email */
+                    email: string;
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Verification email sent */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     totpSetup: {
@@ -2288,6 +2629,199 @@ export interface operations {
             };
         };
     };
+    testDeploymentConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    type: string;
+                    config: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Connection test succeeded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+        };
+    };
+    testDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connection test succeeded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+        };
+    };
+    listDeploymentCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deployment credentials */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["DeploymentCredential"][];
+                        types?: string[];
+                    };
+                };
+            };
+        };
+    };
+    createDeploymentCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentCredentialInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentCredential"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    deleteDeploymentCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateDeploymentCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentCredentialInput"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentCredential"];
+                };
+            };
+        };
+    };
+    testDeploymentCredentialConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    type: string;
+                    config: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Connection test succeeded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+        };
+    };
+    testDeploymentCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connection test succeeded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+        };
+    };
     listNotificationChannels: {
         parameters: {
             query?: never;
@@ -2466,6 +3000,29 @@ export interface operations {
                     "application/json": components["schemas"]["User"];
                 };
             };
+        };
+    };
+    adminSendPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reset email sent */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     listWorkflows: {
@@ -2769,6 +3326,33 @@ export interface operations {
                     };
                 };
             };
+        };
+    };
+    testMail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: email */
+                    to: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Test email sent */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     systemInfo: {
