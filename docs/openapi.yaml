@@ -760,6 +760,124 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
+  /workflows:
+    get:
+      operationId: listWorkflows
+      responses:
+        "200":
+          description: Workflow definitions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Workflow" }
+    post:
+      operationId: createWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkflowInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /workflows/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getWorkflow
+      responses:
+        "200":
+          description: Workflow
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+    patch:
+      operationId: updateWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkflowInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+    delete:
+      operationId: deleteWorkflow
+      responses:
+        "204": { description: Deleted }
+  /workflows/{id}/run:
+    post:
+      operationId: runWorkflow
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "202":
+          description: Workflow queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string }
+        "409": { $ref: "#/components/responses/Problem" }
+  /workflows/{id}/runs:
+    get:
+      operationId: listWorkflowRuns
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200 } }
+      responses:
+        "200":
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkflowRun" }
+  /workflow-runs/{id}:
+    get:
+      operationId: getWorkflowRun
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Run with step timeline
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowRunDetail" }
+  /workflow-runs/{id}/cancel:
+    post:
+      operationId: cancelWorkflowRun
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Canceled }
+        "409": { $ref: "#/components/responses/Problem" }
+  /workflow-runs/{id}/log:
+    get:
+      operationId: downloadWorkflowLog
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Workflow run log
+          content:
+            text/plain:
+              schema: { type: string }
   /audit-logs:
     get:
       operationId: listAuditLogs
@@ -1048,6 +1166,115 @@ components:
           type: array
           items: { type: string }
         enabled: { type: boolean }
+    WorkflowStep:
+      type: object
+      required: [id, type]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [apply, deploy, notify, verify, wait] }
+        name: { type: string }
+        config: { type: object, additionalProperties: true }
+        when: { type: string, enum: [success, failure, always] }
+        parallel_group: { type: string }
+        continue_on_error: { type: boolean }
+    WorkflowPosition:
+      type: object
+      properties:
+        x: { type: number }
+        y: { type: number }
+    WorkflowNode:
+      type: object
+      required: [id, type]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [apply, deploy, notify, verify, wait] }
+        name: { type: string }
+        config: { type: object, additionalProperties: true }
+        position: { $ref: "#/components/schemas/WorkflowPosition" }
+        continue_on_error: { type: boolean }
+    WorkflowEdge:
+      type: object
+      required: [from, to]
+      properties:
+        id: { type: string }
+        from: { type: string }
+        to: { type: string }
+        condition: { type: string, enum: [success, failure, always] }
+    WorkflowDefinition:
+      type: object
+      properties:
+        version: { type: integer }
+        steps:
+          type: array
+          description: Legacy v1 ordered steps.
+          items: { $ref: "#/components/schemas/WorkflowStep" }
+        nodes:
+          type: array
+          description: v2 graph nodes.
+          items: { $ref: "#/components/schemas/WorkflowNode" }
+        edges:
+          type: array
+          description: v2 graph edges.
+          items: { $ref: "#/components/schemas/WorkflowEdge" }
+    WorkflowInput:
+      type: object
+      required: [name, definition]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        trigger_type: { type: string, enum: [manual, schedule] }
+        schedule: { type: string }
+        definition: { $ref: "#/components/schemas/WorkflowDefinition" }
+    Workflow:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        definition: { $ref: "#/components/schemas/WorkflowDefinition" }
+        enabled: { type: boolean }
+        trigger_type: { type: string, enum: [manual, schedule] }
+        schedule: { type: string }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+        last_run: { $ref: "#/components/schemas/WorkflowRun" }
+    WorkflowRun:
+      type: object
+      properties:
+        id: { type: string }
+        workflow_id: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, failed, partial, canceled] }
+        trigger_type: { type: string }
+        error: { type: [string, "null"] }
+        started_at: { type: [integer, "null"] }
+        finished_at: { type: [integer, "null"] }
+        created_at: { type: integer }
+    WorkflowStepRun:
+      type: object
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        step_id: { type: string }
+        type: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [pending, running, succeeded, failed, skipped, canceled] }
+        attempts: { type: integer }
+        job_ids:
+          type: array
+          items: { type: string }
+        output: { type: object, additionalProperties: true }
+        error: { type: [string, "null"] }
+        started_at: { type: [integer, "null"] }
+        finished_at: { type: [integer, "null"] }
+    WorkflowRunDetail:
+      type: object
+      properties:
+        run: { $ref: "#/components/schemas/WorkflowRun" }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/WorkflowStepRun" }
+        log_url: { type: string }
     AuditLog:
       type: object
       properties:

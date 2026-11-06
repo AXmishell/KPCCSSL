@@ -92,6 +92,11 @@ func (s *Server) routes() http.Handler {
 			pr.Get("/jobs/{id}", s.getJob)
 			pr.Get("/jobs/{id}/events", s.jobEvents)
 			pr.Get("/deployments", s.listDeployments)
+			pr.Get("/workflows", s.listWorkflows)
+			pr.Get("/workflows/{id}", s.getWorkflow)
+			pr.Get("/workflows/{id}/runs", s.listWorkflowRuns)
+			pr.Get("/workflow-runs/{id}", s.getWorkflowRun)
+			pr.Get("/workflow-runs/{id}/log", s.workflowRunLog)
 		})
 
 		// Mutating and privileged endpoints.
@@ -123,6 +128,9 @@ func (s *Server) routes() http.Handler {
 			admin.Get("/users", s.listUsers)
 			admin.Post("/users", s.createUser)
 			admin.Patch("/users/{id}", s.updateUser)
+			admin.Post("/workflows", s.createWorkflow)
+			admin.Patch("/workflows/{id}", s.updateWorkflow)
+			admin.Delete("/workflows/{id}", s.deleteWorkflow)
 		})
 
 		api.Group(func(op chi.Router) {
@@ -141,6 +149,8 @@ func (s *Server) routes() http.Handler {
 			op.Delete("/deployments/{id}", s.deleteDeployment)
 			op.Post("/jobs/{id}/cancel", s.cancelJob)
 			op.Post("/jobs/{id}/retry", s.retryJob)
+			op.Post("/workflows/{id}/run", s.runWorkflow)
+			op.Post("/workflow-runs/{id}/cancel", s.cancelWorkflowRun)
 		})
 	})
 

@@ -328,6 +328,143 @@ func TestEndToEndIssueFlow(t *testing.T) {
 	}
 }
 
+func TestWorkflowApplyVerifyAndNotify(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	now := store.Now()
+	ca := &store.CAAccount{ID: "ca-workflow", Name: "CA", DirectoryURL: "https://ca", Status: "registered", KeyVersion: 1, TOSAcceptedAt: &now, CreatedAt: now, UpdatedAt: now}
+	if err := h.store.CreateCAAccount(context.Background(), ca); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := h.svc.CreateDNS(context.Background(), service.DNSInput{Name: "cf", Provider: "dns_cf", Config: map[string]string{"CF_Token": "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := h.svc.CreateCertificate(context.Background(), service.CertInput{
+		Name: "workflow", PrimaryDomain: "wf.example.com", KeyType: "ec-256", CAAccountID: ca.ID,
+		ChallengeType: "dns-01", DNSCredentialID: cred.ID, AutoRenew: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	definition := map[string]any{
+		"version": 1,
+		"steps": []map[string]any{
+			{"id": "apply", "type": "apply", "config": map[string]any{"certificate_id": cert.ID}},
+			{"id": "verify", "type": "verify", "config": map[string]any{"certificate_id": cert.ID, "min_days": 1}},
+			{"id": "notify", "type": "notify", "config": map[string]any{"title": "workflow done", "body": "run {{run_id}}"}},
+		},
+	}
+	data = h.mustDo(t, "POST", "/workflows", map[string]any{
+		"name": "WF", "enabled": true, "trigger_type": "manual", "definition": definition,
+	}, me.CSRF, http.StatusCreated)
+	var wf struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &wf)
+	data = h.mustDo(t, "POST", "/workflows/"+wf.ID+"/run", map[string]any{}, me.CSRF, http.StatusAccepted)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(data, &started)
+
+	wfRunner := service.NewWorkflowRunner(h.svc)
+	for i := 0; i < 20; i++ {
+		_, _ = wfRunner.RunOnce(context.Background())
+		h.drainJobs(t)
+	}
+	data = h.mustDo(t, "GET", "/workflow-runs/"+started.RunID, nil, "", http.StatusOK)
+	var detail struct {
+		Run struct {
+			Status string `json:"status"`
+		} `json:"run"`
+		Steps []struct {
+			StepID string `json:"step_id"`
+			Status string `json:"status"`
+		} `json:"steps"`
+	}
+	_ = json.Unmarshal(data, &detail)
+	if detail.Run.Status != "succeeded" {
+		t.Fatalf("workflow status = %s (%s)", detail.Run.Status, data)
+	}
+	if len(detail.Steps) != 3 {
+		t.Fatalf("steps = %+v", detail.Steps)
+	}
+	for _, st := range detail.Steps {
+		if st.Status != "succeeded" {
+			t.Fatalf("step %s = %s", st.StepID, st.Status)
+		}
+	}
+	issued, err := h.store.GetCertificate(context.Background(), cert.ID)
+	if err != nil || issued.Status != "active" || issued.CurrentRevisionID == nil {
+		t.Fatalf("certificate not active: %+v err=%v", issued, err)
+	}
+}
+
+func TestWorkflowGraphConnection(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	definition := map[string]any{
+		"version": 2,
+		"nodes": []map[string]any{
+			{"id": "start", "type": "wait", "name": "start", "config": map[string]any{"seconds": 1}, "position": map[string]any{"x": 10, "y": 10}},
+			{"id": "done", "type": "notify", "name": "done", "config": map[string]any{"title": "graph done"}, "position": map[string]any{"x": 240, "y": 10}},
+		},
+		"edges": []map[string]any{
+			{"id": "e1", "from": "start", "to": "done", "condition": "success"},
+		},
+	}
+	data = h.mustDo(t, "POST", "/workflows", map[string]any{
+		"name": "Graph WF", "enabled": true, "trigger_type": "manual", "definition": definition,
+	}, me.CSRF, http.StatusCreated)
+	var wf struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &wf)
+	data = h.mustDo(t, "POST", "/workflows/"+wf.ID+"/run", map[string]any{}, me.CSRF, http.StatusAccepted)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(data, &started)
+
+	wfRunner := service.NewWorkflowRunner(h.svc)
+	for i := 0; i < 20; i++ {
+		_, _ = wfRunner.RunOnce(context.Background())
+		h.drainJobs(t)
+		time.Sleep(100 * time.Millisecond)
+	}
+	data = h.mustDo(t, "GET", "/workflow-runs/"+started.RunID, nil, "", http.StatusOK)
+	var detail struct {
+		Run struct {
+			Status string `json:"status"`
+		} `json:"run"`
+		Steps []struct {
+			StepID string `json:"step_id"`
+			Status string `json:"status"`
+		} `json:"steps"`
+	}
+	_ = json.Unmarshal(data, &detail)
+	if detail.Run.Status != "succeeded" || len(detail.Steps) != 2 {
+		t.Fatalf("run=%s steps=%+v", detail.Run.Status, detail.Steps)
+	}
+	for _, st := range detail.Steps {
+		if st.Status != "succeeded" {
+			t.Fatalf("step %s = %s", st.StepID, st.Status)
+		}
+	}
+}
+
 func TestDeploymentLocalFile(t *testing.T) {
 	h := newHarness(t)
 	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)

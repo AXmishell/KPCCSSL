@@ -34,6 +34,11 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if len(recovered) > 0 {
 		slog.Warn("recovered certificates left in transitional states", "count", len(recovered))
 	}
+	if n, err := s.Store.RecoverWorkflowRuns(ctx, now-120); err != nil {
+		slog.Warn("workflow recovery failed", "error", err)
+	} else if n > 0 {
+		slog.Warn("re-queued interrupted workflow runs", "count", n)
+	}
 	// Remove leftover per-job credential directories.
 	tmp := filepath.Join(s.Cfg.DataDir, "tmp", "jobs")
 	if err := os.RemoveAll(tmp); err != nil {
@@ -133,6 +138,8 @@ func (s *Scheduler) Run(ctx context.Context) {
 	s.Sweep(ctx)
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
+	workflows := time.NewTicker(time.Minute)
+	defer workflows.Stop()
 	cleanup := time.NewTicker(6 * time.Hour)
 	defer cleanup.Stop()
 	for {
@@ -141,6 +148,8 @@ func (s *Scheduler) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.Sweep(ctx)
+		case <-workflows.C:
+			s.Service.RunScheduledWorkflows(ctx)
 		case <-cleanup.C:
 			if _, err := s.Store.CleanupSessions(ctx, store.Now()); err != nil {
 				slog.Warn("session cleanup failed", "error", err)

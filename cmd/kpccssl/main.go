@@ -214,6 +214,7 @@ func runServe(cmd string, args []string) error {
 	for i := 0; i < cfg.JobConcurrency; i++ {
 		go a.runner.Run(ctx)
 	}
+	go service.NewWorkflowRunner(a.svc).Run(ctx)
 	sched := &service.Scheduler{Service: a.svc, Store: a.store}
 	go sched.Run(ctx)
 

@@ -11,6 +11,7 @@ import { JobDetailPage } from "@/pages/job-detail";
 import { CAAccountsPage } from "@/pages/ca-accounts";
 import { DNSCredentialsPage } from "@/pages/dns-credentials";
 import { DeploymentsPage } from "@/pages/deployments";
+import { WorkflowsPage } from "@/pages/workflows";
 import { NotificationsPage } from "@/pages/notifications";
 import { AuditPage } from "@/pages/audit";
 import { SettingsPage } from "@/pages/settings";
@@ -53,6 +54,7 @@ export function App() {
         <Route path="/ca-accounts" element={<CAAccountsPage />} />
         <Route path="/dns-credentials" element={<DNSCredentialsPage />} />
         <Route path="/deployments" element={<DeploymentsPage />} />
+        <Route path="/workflows" element={<WorkflowsPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/settings" element={<SettingsPage />} />

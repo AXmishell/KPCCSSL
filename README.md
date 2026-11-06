@@ -16,6 +16,7 @@ KPCCSSL 面向希望自己掌控证书生命周期的团队：在同一个界面
 - **DNS 凭据**：自动同步 acme.sh `dnsapi` 的 190+ 服务商，字段白名单 + AES-256-GCM 加密。
 - **证书**：主域名 + SAN、泛域名、EC/RSA 多种密钥类型；支持 DNS-01、HTTP-01 webroot/standalone、TLS-ALPN-01。
 - **自动化**：持久化任务队列、幂等键、重试退避、SSE 实时日志、启动对账、每日错峰续期、失败保留旧证书。
+- **流水线**：图形化节点连线编排 apply → deploy → verify → notify，支持成功/失败条件边、并行分支、定时触发、持久化运行与节点级日志。
 - **部署**：本地文件（白名单 + 原子写 + 备份）、固定 reload 模板、HTTPS Webhook。
 - **通知**：SMTP、Webhook、Telegram，支持事件订阅、去重与重试。
 - **安全**：Argon2id、HttpOnly 会话、CSRF 防护、RBAC + 用户管理、可选 TOTP、私钥下载 step-up 二次认证、全量脱敏日志与审计。

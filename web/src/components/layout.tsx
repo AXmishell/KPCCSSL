@@ -6,6 +6,7 @@ import {
   BookOpenCheck,
   ClipboardList,
   FileCheck2,
+  GitBranch,
   Globe2,
   LayoutDashboard,
   Menu,
@@ -32,6 +33,7 @@ const navItems = [
   { to: "/ca-accounts", key: "ca", icon: Server },
   { to: "/dns-credentials", key: "dns", icon: Globe2 },
   { to: "/deployments", key: "deployments", icon: Activity },
+  { to: "/workflows", key: "workflows", icon: GitBranch },
   { to: "/notifications", key: "notifications", icon: BookOpenCheck, admin: true },
   { to: "/audit", key: "audit", icon: ShieldCheck, admin: true },
   { to: "/settings", key: "settings", icon: Settings, admin: true },
@@ -130,7 +132,7 @@ export function AppLayout() {
       </Dialog>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between gap-2 border-b border-border bg-background/80 px-4 backdrop-blur lg:px-6">
+        <header className="flex h-16 items-center justify-between gap-2 border-b border-border bg-background/80 px-4 backdrop-blur lg:px-6">
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setMobileOpen(true)}>
               {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}

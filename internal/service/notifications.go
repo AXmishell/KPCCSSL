@@ -32,6 +32,7 @@ func SupportedEvents() []string {
 		"certificate.revoked",
 		"ca.registered",
 		"deployment.failed",
+		"workflow.notify",
 	}
 }
 

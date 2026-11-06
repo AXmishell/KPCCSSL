@@ -180,6 +180,86 @@ export interface Dashboard {
   recent_jobs: Job[];
 }
 
+export type WorkflowStepType = "apply" | "deploy" | "notify" | "verify" | "wait";
+
+export interface WorkflowStep {
+  id: string;
+  type: WorkflowStepType;
+  name?: string;
+  config?: Record<string, unknown>;
+  when?: "success" | "failure" | "always";
+  parallel_group?: string;
+  continue_on_error?: boolean;
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: WorkflowStepType;
+  name?: string;
+  config?: Record<string, unknown>;
+  position?: { x: number; y: number };
+  continue_on_error?: boolean;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  from: string;
+  to: string;
+  condition?: "success" | "failure" | "always";
+}
+
+export interface WorkflowDefinition {
+  version: number;
+  steps?: WorkflowStep[];
+  nodes?: WorkflowNode[];
+  edges?: WorkflowEdge[];
+}
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description: string;
+  definition: WorkflowDefinition;
+  enabled: boolean;
+  trigger_type: "manual" | "schedule";
+  schedule: string;
+  created_at: number;
+  updated_at: number;
+  last_run?: WorkflowRun | null;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "partial" | "canceled";
+  trigger_type: string;
+  error: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  created_at: number;
+}
+
+export interface WorkflowStepRun {
+  id: string;
+  run_id: string;
+  step_id: string;
+  type: WorkflowStepType;
+  name: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped" | "canceled";
+  attempts: number;
+  job_ids: string[];
+  output: Record<string, unknown>;
+  error: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface WorkflowRunDetail {
+  run: WorkflowRun;
+  steps: WorkflowStepRun[];
+  log_url: string;
+}
+
 export interface SystemInfo {
   version: string;
   acme_version: string;
