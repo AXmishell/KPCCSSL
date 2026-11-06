@@ -280,14 +280,18 @@ func (s *Service) AddEvent(ctx context.Context, certID, typ, msg, jobID string) 
 	}
 }
 
-// Notify sends a lifecycle notification without failing the caller.
-func (s *Service) Notify(ctx context.Context, eventType, key, title, body string) {
+// Notify sends a lifecycle notification. Callers that treat notifications as
+// best-effort may ignore the returned error; workflow notify steps surface it so
+// continue_on_error can decide the flow.
+func (s *Service) Notify(ctx context.Context, eventType, key, title, body string) error {
 	if s.Notifier == nil {
-		return
+		return nil
 	}
 	if err := s.Notifier.Dispatch(ctx, notify.Event{Type: eventType, Key: key, Title: title, Body: body}); err != nil {
 		slog.Warn("notification failed", "event", eventType, "error", err)
+		return err
 	}
+	return nil
 }
 
 func validateEmail(email string) error {

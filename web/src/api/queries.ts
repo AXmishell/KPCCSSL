@@ -66,11 +66,11 @@ export function useDNS() {
   return useQuery({ queryKey: qk.dns, queryFn: () => request<{ items: DNSCredential[] }>("/dns-credentials") });
 }
 
-export function useCertificates(params: { status?: string; q?: string }) {
+export function useCertificates(params: { status?: string; q?: string; limit?: number }) {
   const search = new URLSearchParams();
   if (params.status) search.set("status", params.status);
   if (params.q) search.set("q", params.q);
-  search.set("limit", "100");
+  search.set("limit", String(params.limit ?? 100));
   const key = search.toString();
   return useQuery({
     queryKey: qk.certs(key),
@@ -166,7 +166,13 @@ export function useWorkflows() {
   return useQuery({
     queryKey: qk.workflows,
     queryFn: () => request<{ items: Workflow[] }>("/workflows"),
-    refetchInterval: 5000,
+    // Poll quickly only while a run is active; otherwise keep the list fresh
+    // at a low rate so scheduled runs still appear.
+    refetchInterval: (query) =>
+      query.state.data?.items.some((w) => w.last_run && ["queued", "running"].includes(w.last_run.status))
+        ? 3000
+        : 15000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -183,7 +189,9 @@ export function useWorkflowRuns(id?: string) {
     queryKey: qk.workflowRuns(id ?? ""),
     queryFn: () => request<{ items: WorkflowRun[] }>(`/workflows/${id}/runs?limit=50`),
     enabled: Boolean(id),
-    refetchInterval: 3000,
+    refetchInterval: (query) =>
+      query.state.data?.items.some((r) => ["queued", "running"].includes(r.status)) ? 2000 : 10000,
+    refetchIntervalInBackground: false,
   });
 }
 

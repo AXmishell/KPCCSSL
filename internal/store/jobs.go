@@ -129,6 +129,28 @@ func (s *Store) RequeueJob(ctx context.Context, id string, availableAt int64, co
 	return err
 }
 
+// CancelJobsByPrefix cancels every queued job whose idempotency key starts with
+// prefix. Running jobs are not interrupted because the worker does not expose a
+// cancel signal.
+func (s *Store) CancelJobsByPrefix(ctx context.Context, prefix, message string, now int64) (int64, error) {
+	if message == "" {
+		message = "canceled because the workflow run was canceled"
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE jobs
+		SET status='canceled',error_code='E_CANCELED',error_message=?,finished_at=?,heartbeat_at=?
+		WHERE status='queued' AND idempotency_key LIKE ? ESCAPE '\'`,
+		message, now, now, escapeLike(prefix)+"%")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// escapeLike escapes LIKE wildcards in a literal prefix.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // CancelJob cancels a queued job. Running jobs are not interrupted because the
 // worker does not expose a cancel signal; callers get ErrConflict instead.
 func (s *Store) CancelJob(ctx context.Context, id string, now int64) error {

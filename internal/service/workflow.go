@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/axmishell/kpccssl/internal/certificate"
 	"github.com/axmishell/kpccssl/internal/id"
-	"github.com/axmishell/kpccssl/internal/job"
 	"github.com/axmishell/kpccssl/internal/store"
 )
 
@@ -36,6 +34,10 @@ type WorkflowDefinition struct {
 	Steps   []WorkflowStep `json:"steps,omitempty"`
 	Nodes   []WorkflowNode `json:"nodes,omitempty"`
 	Edges   []WorkflowEdge `json:"edges,omitempty"`
+	// AllowMultipleStarts opts a graph into multiple root nodes. It is false by
+	// default so an accidentally unconnected node cannot become a second start
+	// node and run before the rest of the pipeline.
+	AllowMultipleStarts bool `json:"allow_multiple_starts,omitempty"`
 }
 
 // WorkflowNode is a graph node. Position is UI-only and is preserved in the
@@ -80,9 +82,11 @@ type WorkflowInput struct {
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
 	Definition  WorkflowDefinition `json:"definition"`
-	Enabled     bool               `json:"enabled"`
-	TriggerType string             `json:"trigger_type"`
-	Schedule    string             `json:"schedule"`
+	// Enabled is optional. New workflows default to enabled; updates preserve
+	// the current value when the field is omitted.
+	Enabled     *bool  `json:"enabled,omitempty"`
+	TriggerType string `json:"trigger_type"`
+	Schedule    string `json:"schedule"`
 }
 
 // WorkflowView is the public workflow representation.
@@ -101,18 +105,19 @@ type WorkflowView struct {
 
 // WorkflowStepRunView includes decoded job IDs and output for the UI.
 type WorkflowStepRunView struct {
-	ID         string          `json:"id"`
-	RunID      string          `json:"run_id"`
-	StepID     string          `json:"step_id"`
-	Type       string          `json:"type"`
-	Name       string          `json:"name"`
-	Status     string          `json:"status"`
-	Attempts   int             `json:"attempts"`
-	JobIDs     []string        `json:"job_ids"`
-	Output     json.RawMessage `json:"output"`
-	Error      *string         `json:"error"`
-	StartedAt  *int64          `json:"started_at"`
-	FinishedAt *int64          `json:"finished_at"`
+	ID          string          `json:"id"`
+	RunID       string          `json:"run_id"`
+	StepID      string          `json:"step_id"`
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Status      string          `json:"status"`
+	Attempts    int             `json:"attempts"`
+	JobIDs      []string        `json:"job_ids"`
+	Output      json.RawMessage `json:"output"`
+	Error       *string         `json:"error"`
+	StartedAt   *int64          `json:"started_at"`
+	FinishedAt  *int64          `json:"finished_at"`
+	AvailableAt int64           `json:"available_at"`
 }
 
 // WorkflowRunDetail is the run plus its step timeline.
@@ -166,9 +171,13 @@ func (s *Service) ListWorkflows(ctx context.Context) ([]WorkflowView, error) {
 	if err != nil {
 		return nil, err
 	}
+	latest, err := s.Store.LatestWorkflowRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]WorkflowView, 0, len(rows))
 	for i := range rows {
-		v, err := s.workflowView(ctx, &rows[i])
+		v, err := workflowViewFrom(&rows[i], latest[rows[i].ID])
 		if err != nil {
 			return nil, err
 		}
@@ -188,9 +197,13 @@ func (s *Service) GetWorkflow(ctx context.Context, id string) (*WorkflowView, er
 
 // CreateWorkflow validates and stores a workflow.
 func (s *Service) CreateWorkflow(ctx context.Context, in WorkflowInput) (*WorkflowView, error) {
-	name, desc, definitionJSON, enabled, trigger, schedule, err := s.normalizeWorkflow(in)
+	name, desc, definitionJSON, trigger, schedule, err := s.normalizeWorkflow(ctx, in)
 	if err != nil {
 		return nil, err
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
 	}
 	now := store.Now()
 	w := &store.Workflow{
@@ -209,9 +222,13 @@ func (s *Service) UpdateWorkflow(ctx context.Context, id string, in WorkflowInpu
 	if err != nil {
 		return nil, err
 	}
-	name, desc, definitionJSON, enabled, trigger, schedule, err := s.normalizeWorkflow(in)
+	name, desc, definitionJSON, trigger, schedule, err := s.normalizeWorkflow(ctx, in)
 	if err != nil {
 		return nil, err
+	}
+	enabled := existing.Enabled
+	if in.Enabled != nil {
+		enabled = *in.Enabled
 	}
 	existing.Name, existing.Description, existing.DefinitionJSON = name, desc, definitionJSON
 	existing.Enabled, existing.TriggerType, existing.Schedule = enabled, trigger, schedule
@@ -222,8 +239,17 @@ func (s *Service) UpdateWorkflow(ctx context.Context, id string, in WorkflowInpu
 	return s.workflowView(ctx, existing)
 }
 
-// DeleteWorkflow removes a definition and all of its runs.
+// DeleteWorkflow removes a definition and all of its runs. An active run must
+// be canceled first: deleting it would remove the run history while the runner
+// and its jobs continue in the background.
 func (s *Service) DeleteWorkflow(ctx context.Context, id string) error {
+	active, err := s.Store.ActiveWorkflowRun(ctx, id)
+	if err != nil {
+		return err
+	}
+	if active {
+		return &ConflictError{Msg: "workflow has a queued or running run; cancel it first"}
+	}
 	return s.Store.DeleteWorkflow(ctx, id)
 }
 
@@ -236,11 +262,20 @@ func (s *Service) RunWorkflow(ctx context.Context, id string) (*store.WorkflowRu
 	return s.enqueueWorkflowRun(ctx, w, "manual")
 }
 
-// CancelWorkflowRun cancels a pending/running workflow run.
+// CancelWorkflowRun cancels a pending/running workflow run and any jobs that
+// are still queued for it. Running jobs cannot be interrupted by the worker,
+// so they are allowed to finish; no new steps will be started.
 func (s *Service) CancelWorkflowRun(ctx context.Context, id string) error {
-	if err := s.Store.CancelWorkflowRun(ctx, id, store.Now()); err != nil {
+	now := store.Now()
+	if err := s.Store.CancelWorkflowRun(ctx, id, now); err != nil {
 		return err
 	}
+	if _, err := s.Store.CancelJobsByPrefix(ctx, "workflow:"+id+":", "canceled because the workflow run was canceled", now); err != nil {
+		slog.Warn("cannot cancel queued workflow jobs", "run", id, "error", err)
+	}
+	// A queued issue job may have moved the certificate into a transitional
+	// state. Repair those certificates now that the job is canceled.
+	_, _ = s.Store.RecoverInterruptedCertificates(ctx, now)
 	s.Logs.Close(id)
 	return nil
 }
@@ -268,30 +303,34 @@ func (s *Service) GetWorkflowRunDetail(ctx context.Context, id string) (*Workflo
 }
 
 func (s *Service) workflowView(ctx context.Context, w *store.Workflow) (*WorkflowView, error) {
+	runs, err := s.Store.ListWorkflowRuns(ctx, w.ID, 1)
+	var lastRun *store.WorkflowRun
+	if err == nil && len(runs) > 0 {
+		lastRun = &runs[0]
+	}
+	return workflowViewFrom(w, lastRun)
+}
+
+func workflowViewFrom(w *store.Workflow, lastRun *store.WorkflowRun) (*WorkflowView, error) {
 	var def WorkflowDefinition
 	if err := json.Unmarshal([]byte(w.DefinitionJSON), &def); err != nil {
 		return nil, fmt.Errorf("workflow %s: invalid definition: %w", w.ID, err)
 	}
-	v := &WorkflowView{
+	return &WorkflowView{
 		ID: w.ID, Name: w.Name, Description: w.Description, Definition: def,
 		Enabled: w.Enabled, TriggerType: w.TriggerType, Schedule: w.Schedule,
-		CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
-	}
-	runs, err := s.Store.ListWorkflowRuns(ctx, w.ID, 1)
-	if err == nil && len(runs) > 0 {
-		v.LastRun = &runs[0]
-	}
-	return v, nil
+		CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt, LastRun: lastRun,
+	}, nil
 }
 
-func (s *Service) normalizeWorkflow(in WorkflowInput) (name, desc, definitionJSON string, enabled bool, trigger, schedule string, err error) {
+func (s *Service) normalizeWorkflow(ctx context.Context, in WorkflowInput) (name, desc, definitionJSON string, trigger, schedule string, err error) {
 	name = strings.TrimSpace(in.Name)
 	if name == "" || len(name) > 100 || strings.ContainsAny(name, "\r\n\x00") {
-		return "", "", "", false, "", "", errors.New("workflow name must be 1-100 characters")
+		return "", "", "", "", "", errors.New("workflow name must be 1-100 characters")
 	}
 	desc = strings.TrimSpace(in.Description)
 	if len(desc) > 500 || strings.ContainsAny(desc, "\x00") {
-		return "", "", "", false, "", "", errors.New("workflow description is too long")
+		return "", "", "", "", "", errors.New("workflow description is too long")
 	}
 	def := in.Definition
 	if def.Version == 0 {
@@ -302,31 +341,43 @@ func (s *Service) normalizeWorkflow(in WorkflowInput) (name, desc, definitionJSO
 		}
 	}
 	if err := validateWorkflowDefinition(&def); err != nil {
-		return "", "", "", false, "", "", err
+		return "", "", "", "", "", err
+	}
+	if err := s.validateWorkflowReferences(ctx, &def); err != nil {
+		return "", "", "", "", "", err
 	}
 	raw, err := json.Marshal(def)
 	if err != nil {
-		return "", "", "", false, "", "", err
+		return "", "", "", "", "", err
 	}
 	trigger = in.TriggerType
 	if trigger == "" {
 		trigger = "manual"
 	}
 	if trigger != "manual" && trigger != "schedule" {
-		return "", "", "", false, "", "", errors.New("trigger_type must be manual or schedule")
+		return "", "", "", "", "", errors.New("trigger_type must be manual or schedule")
 	}
 	if trigger == "schedule" {
 		schedule, err = normalizeSchedule(in.Schedule)
 		if err != nil {
-			return "", "", "", false, "", "", err
+			return "", "", "", "", "", err
 		}
 	} else {
 		schedule = ""
 	}
-	return name, desc, string(raw), in.Enabled, trigger, schedule, nil
+	return name, desc, string(raw), trigger, schedule, nil
 }
 
 func validateWorkflowDefinition(def *WorkflowDefinition) error {
+	if def.Version != 0 && def.Version != 1 && def.Version != 2 {
+		return fmt.Errorf("unsupported workflow definition version %d", def.Version)
+	}
+	if def.Version == 1 && len(def.Nodes) > 0 {
+		return errors.New("version 1 workflow must use steps, not nodes")
+	}
+	if def.Version == 2 && len(def.Steps) > 0 {
+		return errors.New("version 2 workflow must use nodes, not steps")
+	}
 	if len(def.Nodes) > 0 {
 		if len(def.Steps) > 0 {
 			return errors.New("workflow cannot mix steps and nodes")
@@ -351,6 +402,9 @@ func validateWorkflowDefinition(def *WorkflowDefinition) error {
 			return fmt.Errorf("duplicate step id %q", st.ID)
 		}
 		ids[st.ID] = true
+		if err := validateStepName(st.Name); err != nil {
+			return fmt.Errorf("step %q: %w", st.ID, err)
+		}
 		switch st.Type {
 		case StepApply, StepDeploy, StepNotify, StepVerify, StepWait:
 		default:
@@ -377,6 +431,99 @@ func validateWorkflowDefinition(def *WorkflowDefinition) error {
 	return nil
 }
 
+// validateWorkflowReferences rejects definitions that point at missing or
+// unusable resources at save time instead of failing only when the run starts.
+func (s *Service) validateWorkflowReferences(ctx context.Context, def *WorkflowDefinition) error {
+	steps := def.Steps
+	if len(def.Nodes) > 0 {
+		steps = make([]WorkflowStep, 0, len(def.Nodes))
+		for _, n := range def.Nodes {
+			steps = append(steps, nodeToStep(n))
+		}
+	}
+	for _, st := range steps {
+		switch st.Type {
+		case StepApply:
+			var cfg ApplyStepConfig
+			if len(st.Config) > 0 {
+				if err := json.Unmarshal(st.Config, &cfg); err != nil {
+					return fmt.Errorf("step %q: %w", st.ID, err)
+				}
+			}
+			if cfg.CertificateID != "" {
+				if _, err := s.Store.GetCertificate(ctx, cfg.CertificateID); err != nil {
+					return fmt.Errorf("step %q: certificate %s: %w", st.ID, cfg.CertificateID, err)
+				}
+				continue
+			}
+			if cfg.PrimaryDomain == "" {
+				continue
+			}
+			if _, err := certificate.NormalizeDomain(cfg.PrimaryDomain); err != nil {
+				return fmt.Errorf("step %q: %w", st.ID, err)
+			}
+			if err := certificate.ValidateKeyType(cfg.KeyType); err != nil {
+				return fmt.Errorf("step %q: %w", st.ID, err)
+			}
+			if err := certificate.ValidateChallenge(cfg.ChallengeType, cfg.SAN); err != nil {
+				return fmt.Errorf("step %q: %w", st.ID, err)
+			}
+			ca, err := s.Store.GetCAAccount(ctx, cfg.CAAccountID)
+			if err != nil {
+				return fmt.Errorf("step %q: CA account %s: %w", st.ID, cfg.CAAccountID, err)
+			}
+			if ca.Status == "disabled" {
+				return fmt.Errorf("step %q: CA account %s is disabled", st.ID, cfg.CAAccountID)
+			}
+			if cfg.ChallengeType == "dns-01" {
+				if cfg.DNSCredentialID == "" {
+					return fmt.Errorf("step %q: DNS-01 requires a DNS credential", st.ID)
+				}
+				if _, err := s.Store.GetDNSCredential(ctx, cfg.DNSCredentialID); err != nil {
+					return fmt.Errorf("step %q: DNS credential %s: %w", st.ID, cfg.DNSCredentialID, err)
+				}
+			}
+			if cfg.ChallengeType == "http-01-webroot" && strings.TrimSpace(cfg.Webroot) == "" {
+				return fmt.Errorf("step %q: HTTP-01 webroot requires a webroot path", st.ID)
+			}
+		case StepDeploy:
+			var cfg DeployStepConfig
+			if len(st.Config) > 0 {
+				if err := json.Unmarshal(st.Config, &cfg); err != nil {
+					return fmt.Errorf("step %q: %w", st.ID, err)
+				}
+			}
+			if cfg.CertificateID != "" {
+				if _, err := s.Store.GetCertificate(ctx, cfg.CertificateID); err != nil {
+					return fmt.Errorf("step %q: certificate %s: %w", st.ID, cfg.CertificateID, err)
+				}
+			}
+			if cfg.RevisionID != "" && cfg.CertificateID != "" {
+				rev, err := s.Store.GetRevision(ctx, cfg.RevisionID)
+				if err != nil {
+					return fmt.Errorf("step %q: revision %s: %w", st.ID, cfg.RevisionID, err)
+				}
+				if rev.CertificateID != cfg.CertificateID {
+					return fmt.Errorf("step %q: revision %s does not belong to certificate %s", st.ID, cfg.RevisionID, cfg.CertificateID)
+				}
+			}
+		case StepVerify:
+			var cfg VerifyStepConfig
+			if len(st.Config) > 0 {
+				if err := json.Unmarshal(st.Config, &cfg); err != nil {
+					return fmt.Errorf("step %q: %w", st.ID, err)
+				}
+			}
+			if cfg.CertificateID != "" {
+				if _, err := s.Store.GetCertificate(ctx, cfg.CertificateID); err != nil {
+					return fmt.Errorf("step %q: certificate %s: %w", st.ID, cfg.CertificateID, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func validateWorkflowGraph(def *WorkflowDefinition) error {
 	if len(def.Nodes) == 0 {
 		return errors.New("workflow must contain at least one node")
@@ -395,6 +542,9 @@ func validateWorkflowGraph(def *WorkflowDefinition) error {
 			return fmt.Errorf("duplicate node id %q", n.ID)
 		}
 		nodes[n.ID] = true
+		if err := validateStepName(n.Name); err != nil {
+			return fmt.Errorf("node %q: %w", n.ID, err)
+		}
 		switch n.Type {
 		case StepApply, StepDeploy, StepNotify, StepVerify, StepWait:
 		default:
@@ -406,11 +556,15 @@ func validateWorkflowGraph(def *WorkflowDefinition) error {
 	}
 	incoming := map[string]int{}
 	edgeIDs := map[string]bool{}
+	edgePairs := map[string]bool{}
 	for i := range def.Edges {
 		e := &def.Edges[i]
 		e.ID = strings.TrimSpace(e.ID)
 		if e.ID == "" {
 			e.ID = fmt.Sprintf("edge-%d", i+1)
+		}
+		if len(e.ID) > 64 {
+			return fmt.Errorf("edge %d: id must be at most 64 characters", i+1)
 		}
 		if edgeIDs[e.ID] {
 			return fmt.Errorf("duplicate edge id %q", e.ID)
@@ -422,6 +576,11 @@ func validateWorkflowGraph(def *WorkflowDefinition) error {
 		if e.From == e.To {
 			return fmt.Errorf("edge %q cannot connect a node to itself", e.ID)
 		}
+		pair := e.From + ">" + e.To
+		if edgePairs[pair] {
+			return fmt.Errorf("duplicate edge from %q to %q", e.From, e.To)
+		}
+		edgePairs[pair] = true
 		if e.Condition == "" {
 			e.Condition = "success"
 		}
@@ -432,18 +591,32 @@ func validateWorkflowGraph(def *WorkflowDefinition) error {
 		}
 		incoming[e.To]++
 	}
-	start := false
+	roots := 0
 	for id := range nodes {
 		if incoming[id] == 0 {
-			start = true
-			break
+			roots++
 		}
 	}
-	if !start {
+	if roots == 0 {
 		return errors.New("workflow graph has no start node")
+	}
+	if roots > 1 && !def.AllowMultipleStarts {
+		return errors.New("workflow graph has multiple start nodes; connect them or set allow_multiple_starts")
 	}
 	if hasCycle(def) {
 		return errors.New("workflow graph contains a cycle")
+	}
+	return nil
+}
+
+// validateStepName keeps user-provided labels bounded and free of control
+// characters. Empty names are allowed and fall back to the step id.
+func validateStepName(name string) error {
+	if len(name) > 100 {
+		return errors.New("name must be at most 100 characters")
+	}
+	if strings.ContainsAny(name, "\r\n\x00") {
+		return errors.New("name must not contain control characters")
 	}
 	return nil
 }
@@ -650,7 +823,7 @@ func (s *Service) RunScheduledWorkflows(ctx context.Context) {
 		if !w.Enabled || w.TriggerType != "schedule" || !scheduleMatches(w.Schedule, now) {
 			continue
 		}
-		recent, err := s.Store.RecentWorkflowRun(ctx, w.ID, store.Now()-60)
+		recent, err := s.Store.RecentWorkflowRun(ctx, w.ID, "schedule", store.Now()-60)
 		if err != nil || recent {
 			continue
 		}
@@ -676,752 +849,6 @@ func stepRunView(st *store.WorkflowStepRun) WorkflowStepRunView {
 	return WorkflowStepRunView{
 		ID: st.ID, RunID: st.RunID, StepID: st.StepID, Type: st.Type, Name: st.Name,
 		Status: st.Status, Attempts: st.Attempts, JobIDs: jobIDs, Output: output,
-		Error: st.Error, StartedAt: st.StartedAt, FinishedAt: st.FinishedAt,
+		Error: st.Error, StartedAt: st.StartedAt, FinishedAt: st.FinishedAt, AvailableAt: st.AvailableAt,
 	}
-}
-
-// WorkflowRunner advances durable workflow runs. It does not execute acme.sh
-// itself: apply/deploy steps enqueue the existing jobs and only observe them.
-type WorkflowRunner struct {
-	Store   *store.Store
-	Service *Service
-	Owner   string
-}
-
-// NewWorkflowRunner creates a runner. The owner ID prevents two processes that
-// share the database (serve + worker) from advancing the same run.
-func NewWorkflowRunner(s *Service) *WorkflowRunner {
-	return &WorkflowRunner{Store: s.Store, Service: s, Owner: id.New()}
-}
-
-// Run blocks until ctx is canceled.
-func (r *WorkflowRunner) Run(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	recoverTicker := time.NewTicker(30 * time.Second)
-	defer recoverTicker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			for i := 0; i < 8; i++ {
-				progressed, err := r.RunOnce(ctx)
-				if err != nil {
-					slog.Warn("workflow runner", "error", err)
-				}
-				if !progressed {
-					break
-				}
-			}
-		case <-recoverTicker.C:
-			if n, err := r.Store.RecoverWorkflowRuns(ctx, store.Now()-120); err != nil {
-				slog.Warn("workflow watchdog", "error", err)
-			} else if n > 0 {
-				slog.Warn("recovered stale workflow runs", "count", n)
-			}
-		}
-	}
-}
-
-// RunOnce advances running workflows and claims one queued run.
-func (r *WorkflowRunner) RunOnce(ctx context.Context) (bool, error) {
-	runs, err := r.Store.ListRunningWorkflowRuns(ctx, r.Owner)
-	if err != nil {
-		return false, err
-	}
-	progressed := false
-	for i := range runs {
-		finished, err := r.advance(ctx, &runs[i])
-		if err != nil {
-			return progressed, err
-		}
-		if finished {
-			progressed = true
-		}
-	}
-	run, err := r.Store.ClaimNextWorkflowRun(ctx, store.Now(), r.Owner)
-	if err != nil {
-		return progressed, err
-	}
-	if run == nil {
-		return progressed, nil
-	}
-	_, err = r.advance(ctx, run)
-	return true, err
-}
-
-func (r *WorkflowRunner) advance(ctx context.Context, run *store.WorkflowRun) (bool, error) {
-	_ = r.Store.HeartbeatWorkflowRun(ctx, run.ID, store.Now())
-	logw := r.Service.Logs.Writer(run.ID)
-	var def WorkflowDefinition
-	if err := json.Unmarshal([]byte(run.DefinitionJSON), &def); err != nil {
-		msg := "invalid workflow definition: " + err.Error()
-		_ = r.Store.FinishWorkflowRun(ctx, run.ID, "failed", &msg, store.Now())
-		r.Service.Logs.Close(run.ID)
-		return true, nil
-	}
-	if len(def.Nodes) > 0 {
-		return r.advanceGraph(ctx, run, &def, logw)
-	}
-	if err := r.ensureStepRuns(ctx, run, &def); err != nil {
-		return false, err
-	}
-	stepRuns, err := r.Store.ListStepRuns(ctx, run.ID)
-	if err != nil {
-		return false, err
-	}
-	byStep := map[string]*store.WorkflowStepRun{}
-	for i := range stepRuns {
-		byStep[stepRuns[i].StepID] = &stepRuns[i]
-	}
-	groups := groupSteps(def.Steps)
-	hadBlockingFailure := false
-	anyFailure := false
-	anyBlockingFailure := false
-	pending := false
-	for _, group := range groups {
-		when := group[0].When
-		if when == "" {
-			when = "success"
-		}
-		if (when == "success" && hadBlockingFailure) || (when == "failure" && !hadBlockingFailure) {
-			for _, step := range group {
-				st := byStep[step.ID]
-				if st != nil && (st.Status == "pending" || st.Status == "running") {
-					_ = r.Store.FinishStepRun(ctx, st.ID, "skipped", "{}", nil, store.Now())
-				}
-			}
-			continue
-		}
-
-		groupFailed := false
-		groupBlockingFailure := false
-		groupRunning := false
-		var pendingSteps []WorkflowStep
-		for _, step := range group {
-			st := byStep[step.ID]
-			if st == nil {
-				continue
-			}
-			if st.Status == "running" {
-				var jobIDs []string
-				_ = json.Unmarshal([]byte(st.JobIDsJSON), &jobIDs)
-				var done bool
-				var err error
-				if len(jobIDs) > 0 {
-					done, err = r.checkStepJobs(ctx, run, st)
-				} else {
-					// Crash between StartStepRun and SetStepJobs, or a wait
-					// step: re-enter the executor. Job-backed steps are
-					// idempotent through their workflow idempotency key.
-					done, err = r.executeStep(ctx, run, step, st, logw)
-				}
-				if err != nil {
-					return false, err
-				}
-				if !done {
-					groupRunning = true
-					continue
-				}
-				// Re-read the updated row.
-				st, _ = r.Store.GetStepRun(ctx, run.ID, step.ID)
-				if st != nil {
-					byStep[step.ID] = st
-				}
-			}
-			if st == nil {
-				continue
-			}
-			switch st.Status {
-			case "failed":
-				groupFailed = true
-				anyFailure = true
-				if !step.ContinueOnError {
-					groupBlockingFailure = true
-					anyBlockingFailure = true
-				}
-			case "pending":
-				pendingSteps = append(pendingSteps, step)
-			}
-		}
-		if groupRunning {
-			// A downstream group must not start until this group finishes.
-			return false, nil
-		}
-		if groupFailed {
-			if groupBlockingFailure {
-				hadBlockingFailure = true
-			}
-			continue
-		}
-		if len(pendingSteps) > 0 {
-			for _, step := range pendingSteps {
-				st := byStep[step.ID]
-				if st == nil {
-					continue
-				}
-				if err := r.Store.StartStepRun(ctx, st.ID, store.Now()); err != nil {
-					return false, err
-				}
-				fmt.Fprintf(logw, "=== step %s (%s) ===\n", step.ID, step.Type)
-				done, err := r.executeStep(ctx, run, step, byStep[step.ID], logw)
-				if err != nil {
-					msg := job.Redact(err.Error())
-					_ = r.Store.FinishStepRun(ctx, st.ID, "failed", "{}", &msg, store.Now())
-					fmt.Fprintf(logw, "=== step failed: %s ===\n", msg)
-					groupFailed = true
-					anyFailure = true
-					if !step.ContinueOnError {
-						groupBlockingFailure = true
-						anyBlockingFailure = true
-					}
-					continue
-				}
-				if !done {
-					pending = true
-					continue
-				}
-				// A synchronous step may have finished inside executeStep.
-				cur, _ := r.Store.GetStepRun(ctx, run.ID, step.ID)
-				if cur != nil {
-					byStep[step.ID] = cur
-					if cur.Status == "failed" {
-						groupFailed = true
-						anyFailure = true
-						if !step.ContinueOnError {
-							groupBlockingFailure = true
-							anyBlockingFailure = true
-						}
-					}
-				}
-			}
-			if groupFailed && groupBlockingFailure {
-				hadBlockingFailure = true
-			}
-			if pending {
-				return false, nil
-			}
-			continue
-		}
-	}
-	if pending {
-		return false, nil
-	}
-	status := "succeeded"
-	var runErr *string
-	if anyBlockingFailure {
-		status = "failed"
-		msg := "one or more workflow steps failed"
-		runErr = &msg
-	} else if anyFailure {
-		status = "partial"
-		msg := "one or more non-blocking workflow steps failed"
-		runErr = &msg
-	}
-	if err := r.Store.FinishWorkflowRun(ctx, run.ID, status, runErr, store.Now()); err != nil {
-		return false, err
-	}
-	fmt.Fprintf(logw, "=== workflow %s ===\n", status)
-	r.Service.Logs.Close(run.ID)
-	return true, nil
-}
-
-type graphReadiness int
-
-const (
-	graphWait graphReadiness = iota
-	graphNodeReady
-	graphSkip
-)
-
-// advanceGraph executes a node/edge graph. A node becomes ready when every
-// upstream node is terminal and every incoming edge condition is satisfied.
-func (r *WorkflowRunner) advanceGraph(ctx context.Context, run *store.WorkflowRun, def *WorkflowDefinition, logw io.Writer) (bool, error) {
-	if err := r.ensureGraphStepRuns(ctx, run, def); err != nil {
-		return false, err
-	}
-	stepRuns, err := r.Store.ListStepRuns(ctx, run.ID)
-	if err != nil {
-		return false, err
-	}
-	byStep := map[string]*store.WorkflowStepRun{}
-	for i := range stepRuns {
-		byStep[stepRuns[i].StepID] = &stepRuns[i]
-	}
-	incoming := map[string][]WorkflowEdge{}
-	for _, e := range def.Edges {
-		incoming[e.To] = append(incoming[e.To], e)
-	}
-	anyRunning := false
-	for iter := 0; iter < 100; iter++ {
-		progress := false
-		for _, n := range def.Nodes {
-			st := byStep[n.ID]
-			if st == nil || st.Status != "running" {
-				continue
-			}
-			var jobIDs []string
-			_ = json.Unmarshal([]byte(st.JobIDsJSON), &jobIDs)
-			step := nodeToStep(n)
-			var done bool
-			var err error
-			if len(jobIDs) > 0 {
-				done, err = r.checkStepJobs(ctx, run, st)
-			} else {
-				done, err = r.executeStep(ctx, run, step, st, logw)
-			}
-			if err != nil {
-				return false, err
-			}
-			if !done {
-				anyRunning = true
-				continue
-			}
-			if cur, _ := r.Store.GetStepRun(ctx, run.ID, n.ID); cur != nil {
-				byStep[n.ID] = cur
-			}
-			progress = true
-		}
-		for _, n := range def.Nodes {
-			st := byStep[n.ID]
-			if st == nil || st.Status != "pending" {
-				continue
-			}
-			switch evaluateGraphNode(incoming[n.ID], byStep) {
-			case graphSkip:
-				_ = r.Store.FinishStepRun(ctx, st.ID, "skipped", "{}", nil, store.Now())
-				if cur, _ := r.Store.GetStepRun(ctx, run.ID, n.ID); cur != nil {
-					byStep[n.ID] = cur
-				}
-				progress = true
-			case graphWait:
-				continue
-			case graphNodeReady:
-				if err := r.Store.StartStepRun(ctx, st.ID, store.Now()); err != nil {
-					return false, err
-				}
-				step := nodeToStep(n)
-				fmt.Fprintf(logw, "=== node %s (%s) ===\n", n.ID, n.Type)
-				done, err := r.executeStep(ctx, run, step, st, logw)
-				if err != nil {
-					msg := job.Redact(err.Error())
-					_ = r.Store.FinishStepRun(ctx, st.ID, "failed", "{}", &msg, store.Now())
-					fmt.Fprintf(logw, "=== node failed: %s ===\n", msg)
-					progress = true
-					continue
-				}
-				if !done {
-					anyRunning = true
-					continue
-				}
-				if cur, _ := r.Store.GetStepRun(ctx, run.ID, n.ID); cur != nil {
-					byStep[n.ID] = cur
-				}
-				progress = true
-			}
-		}
-		if anyRunning {
-			return false, nil
-		}
-		if !progress {
-			break
-		}
-	}
-	for _, n := range def.Nodes {
-		st := byStep[n.ID]
-		if st != nil && (st.Status == "pending" || st.Status == "running") {
-			return false, nil
-		}
-	}
-	anyFailure := false
-	blockingFailure := false
-	for _, n := range def.Nodes {
-		st := byStep[n.ID]
-		if st != nil && st.Status == "failed" {
-			anyFailure = true
-			if !n.ContinueOnError {
-				blockingFailure = true
-			}
-		}
-	}
-	status := "succeeded"
-	var runErr *string
-	if blockingFailure {
-		status = "failed"
-		msg := "one or more workflow nodes failed"
-		runErr = &msg
-	} else if anyFailure {
-		status = "partial"
-		msg := "one or more non-blocking workflow nodes failed"
-		runErr = &msg
-	}
-	if err := r.Store.FinishWorkflowRun(ctx, run.ID, status, runErr, store.Now()); err != nil {
-		return false, err
-	}
-	fmt.Fprintf(logw, "=== workflow %s ===\n", status)
-	r.Service.Logs.Close(run.ID)
-	return true, nil
-}
-
-func evaluateGraphNode(edges []WorkflowEdge, steps map[string]*store.WorkflowStepRun) graphReadiness {
-	if len(edges) == 0 {
-		return graphNodeReady
-	}
-	// Wait until every upstream source is terminal before deciding whether an
-	// unsatisfied condition means "skip".
-	for _, e := range edges {
-		src := steps[e.From]
-		if src == nil || src.Status == "pending" || src.Status == "running" {
-			return graphWait
-		}
-		if src.Status != "succeeded" && src.Status != "failed" && src.Status != "skipped" && src.Status != "canceled" {
-			return graphWait
-		}
-	}
-	for _, e := range edges {
-		src := steps[e.From]
-		condition := e.Condition
-		if condition == "" {
-			condition = "success"
-		}
-		satisfied := false
-		switch condition {
-		case "success":
-			satisfied = src.Status == "succeeded"
-		case "failure":
-			satisfied = src.Status == "failed"
-		case "always":
-			satisfied = true
-		}
-		if !satisfied {
-			return graphSkip
-		}
-	}
-	return graphNodeReady
-}
-
-func (r *WorkflowRunner) ensureGraphStepRuns(ctx context.Context, run *store.WorkflowRun, def *WorkflowDefinition) error {
-	for _, n := range def.Nodes {
-		name := n.Name
-		if name == "" {
-			name = n.Type + " " + n.ID
-		}
-		if err := r.Store.CreateStepRun(ctx, &store.WorkflowStepRun{
-			ID: id.New(), RunID: run.ID, StepID: n.ID, Type: n.Type, Name: name,
-			Status: "pending", CreatedAt: store.Now(),
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func nodeToStep(n WorkflowNode) WorkflowStep {
-	return WorkflowStep{
-		ID: n.ID, Type: n.Type, Name: n.Name, Config: n.Config,
-		ContinueOnError: n.ContinueOnError,
-	}
-}
-
-func (r *WorkflowRunner) ensureStepRuns(ctx context.Context, run *store.WorkflowRun, def *WorkflowDefinition) error {
-	for _, step := range def.Steps {
-		name := step.Name
-		if name == "" {
-			name = step.Type + " " + step.ID
-		}
-		if err := r.Store.CreateStepRun(ctx, &store.WorkflowStepRun{
-			ID: id.New(), RunID: run.ID, StepID: step.ID, Type: step.Type, Name: name,
-			Status: "pending", CreatedAt: store.Now(),
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *WorkflowRunner) checkStepJobs(ctx context.Context, run *store.WorkflowRun, st *store.WorkflowStepRun) (bool, error) {
-	var jobIDs []string
-	_ = json.Unmarshal([]byte(st.JobIDsJSON), &jobIDs)
-	if len(jobIDs) == 0 {
-		return false, nil
-	}
-	var lastErr string
-	var firstJob *store.Job
-	for _, jobID := range jobIDs {
-		j, err := r.Store.GetJob(ctx, jobID)
-		if err != nil {
-			lastErr = "job " + jobID + " disappeared"
-			break
-		}
-		if firstJob == nil {
-			firstJob = j
-		}
-		switch j.Status {
-		case "succeeded":
-			continue
-		case "queued", "running":
-			return false, nil
-		default:
-			if j.ErrorMessage != nil && *j.ErrorMessage != "" {
-				lastErr = *j.ErrorMessage
-			} else {
-				lastErr = "job " + jobID + " " + j.Status
-			}
-		}
-	}
-	if lastErr != "" {
-		msg := job.Redact(lastErr)
-		_ = r.Store.FinishStepRun(ctx, st.ID, "failed", st.OutputJSON, &msg, store.Now())
-		return true, nil
-	}
-	output := st.OutputJSON
-	if st.Type == StepApply && firstJob != nil && firstJob.CertificateID != nil {
-		output = mustJSON(map[string]any{"certificate_id": *firstJob.CertificateID, "job_id": firstJob.ID})
-	}
-	_ = r.Store.FinishStepRun(ctx, st.ID, "succeeded", output, nil, store.Now())
-	return true, nil
-}
-
-func (r *WorkflowRunner) executeStep(ctx context.Context, run *store.WorkflowRun, step WorkflowStep, st *store.WorkflowStepRun, logw io.Writer) (bool, error) {
-	switch step.Type {
-	case StepApply:
-		return r.executeApply(ctx, run, step, st, logw)
-	case StepDeploy:
-		return r.executeDeploy(ctx, run, step, st, logw)
-	case StepNotify:
-		return r.executeNotify(ctx, run, step, st, logw)
-	case StepVerify:
-		return r.executeVerify(ctx, run, step, st, logw)
-	case StepWait:
-		var cfg WaitStepConfig
-		if len(step.Config) > 0 {
-			if err := json.Unmarshal(step.Config, &cfg); err != nil {
-				return false, err
-			}
-		}
-		if st.StartedAt == nil {
-			return false, nil
-		}
-		if store.Now()-*st.StartedAt < int64(cfg.Seconds) {
-			return false, nil
-		}
-		_ = r.Store.FinishStepRun(ctx, st.ID, "succeeded", "{}", nil, store.Now())
-		return true, nil
-	}
-	return false, fmt.Errorf("unsupported step type %q", step.Type)
-}
-
-func (r *WorkflowRunner) executeApply(ctx context.Context, run *store.WorkflowRun, step WorkflowStep, st *store.WorkflowStepRun, logw io.Writer) (bool, error) {
-	var cfg ApplyStepConfig
-	if len(step.Config) > 0 {
-		if err := json.Unmarshal(step.Config, &cfg); err != nil {
-			return false, err
-		}
-	}
-	certID := cfg.CertificateID
-	if certID == "" {
-		certID = r.inheritCertificateID(ctx, run.ID)
-	}
-	if certID == "" {
-		var err error
-		certID, err = r.createInlineCertificate(ctx, cfg)
-		if err != nil {
-			return false, err
-		}
-	}
-	if certID == "" {
-		return false, errors.New("no certificate configured for apply step")
-	}
-	output := mustJSON(map[string]any{"certificate_id": certID})
-	_ = r.Store.SetStepOutput(ctx, st.ID, output)
-	c, err := r.Store.GetCertificate(ctx, certID)
-	if err != nil {
-		return false, err
-	}
-	mode := cfg.Mode
-	if mode == "" || mode == "auto" {
-		if c.CurrentRevisionID != nil {
-			mode = "renew"
-		} else {
-			mode = "issue"
-		}
-	}
-	key := "workflow:" + run.ID + ":" + step.ID
-	var j *store.Job
-	if mode == "issue" {
-		j, err = r.Service.Issue(ctx, certID, key, cfg.Force)
-	} else {
-		j, err = r.Service.Renew(ctx, certID, key, cfg.Force)
-	}
-	if err != nil {
-		return false, err
-	}
-	fmt.Fprintf(logw, "queued %s job %s for %s\n", mode, j.ID, certID)
-	_ = r.Store.SetStepJobs(ctx, st.ID, mustJSON([]string{j.ID}))
-	return false, nil
-}
-
-func (r *WorkflowRunner) executeDeploy(ctx context.Context, run *store.WorkflowRun, step WorkflowStep, st *store.WorkflowStepRun, logw io.Writer) (bool, error) {
-	var cfg DeployStepConfig
-	if len(step.Config) > 0 {
-		if err := json.Unmarshal(step.Config, &cfg); err != nil {
-			return false, err
-		}
-	}
-	certID := cfg.CertificateID
-	if certID == "" {
-		certID = r.inheritCertificateID(ctx, run.ID)
-	}
-	if certID == "" {
-		return false, errors.New("deploy step has no certificate_id and no preceding apply step")
-	}
-	key := "workflow:" + run.ID + ":" + step.ID
-	var jobs []*store.Job
-	var err error
-	if cfg.RevisionID != "" {
-		jobs, err = r.Service.DeployRevisionNow(ctx, certID, cfg.RevisionID, key)
-	} else {
-		jobs, err = r.Service.DeployNow(ctx, certID, key)
-	}
-	if err != nil {
-		return false, err
-	}
-	ids := make([]string, 0, len(jobs))
-	for _, j := range jobs {
-		ids = append(ids, j.ID)
-	}
-	fmt.Fprintf(logw, "queued %d deploy job(s) for %s\n", len(ids), certID)
-	_ = r.Store.SetStepJobs(ctx, st.ID, mustJSON(ids))
-	_ = r.Store.SetStepOutput(ctx, st.ID, mustJSON(map[string]any{"certificate_id": certID}))
-	return len(ids) == 0, nil
-}
-
-func (r *WorkflowRunner) executeNotify(ctx context.Context, run *store.WorkflowRun, step WorkflowStep, st *store.WorkflowStepRun, logw io.Writer) (bool, error) {
-	var cfg NotifyStepConfig
-	if len(step.Config) > 0 {
-		if err := json.Unmarshal(step.Config, &cfg); err != nil {
-			return false, err
-		}
-	}
-	event := cfg.Event
-	if event == "" {
-		event = "workflow.notify"
-	}
-	title := renderWorkflowText(cfg.Title, run, step)
-	body := renderWorkflowText(cfg.Body, run, step)
-	fmt.Fprintf(logw, "sending notification %s: %s\n", event, title)
-	r.Service.Notify(ctx, event, "workflow:"+run.ID+":"+step.ID, title, body)
-	_ = r.Store.FinishStepRun(ctx, st.ID, "succeeded", "{}", nil, store.Now())
-	return true, nil
-}
-
-func (r *WorkflowRunner) executeVerify(ctx context.Context, run *store.WorkflowRun, step WorkflowStep, st *store.WorkflowStepRun, logw io.Writer) (bool, error) {
-	var cfg VerifyStepConfig
-	if len(step.Config) > 0 {
-		if err := json.Unmarshal(step.Config, &cfg); err != nil {
-			return false, err
-		}
-	}
-	certID := cfg.CertificateID
-	if certID == "" {
-		certID = r.inheritCertificateID(ctx, run.ID)
-	}
-	if certID == "" {
-		return false, errors.New("verify step has no certificate_id")
-	}
-	c, err := r.Store.GetCertificate(ctx, certID)
-	if err != nil {
-		return false, err
-	}
-	if c.CurrentRevisionID == nil {
-		return false, errors.New("certificate has no issued revision")
-	}
-	rev, err := r.Store.GetRevision(ctx, *c.CurrentRevisionID)
-	if err != nil {
-		return false, err
-	}
-	if rev.NotAfter <= store.Now()+int64(cfg.MinDays)*86400 {
-		msg := fmt.Sprintf("certificate expires at %s (minimum %d days required)", time.Unix(rev.NotAfter, 0).UTC().Format(time.RFC3339), cfg.MinDays)
-		_ = r.Store.FinishStepRun(ctx, st.ID, "failed", mustJSON(map[string]any{"certificate_id": certID}), &msg, store.Now())
-		return true, nil
-	}
-	fmt.Fprintf(logw, "certificate %s verified, expires %s\n", certID, time.Unix(rev.NotAfter, 0).UTC().Format(time.RFC3339))
-	_ = r.Store.FinishStepRun(ctx, st.ID, "succeeded", mustJSON(map[string]any{"certificate_id": certID, "revision_id": rev.ID, "not_after": rev.NotAfter}), nil, store.Now())
-	return true, nil
-}
-
-func (r *WorkflowRunner) inheritCertificateID(ctx context.Context, runID string) string {
-	steps, err := r.Store.ListStepRuns(ctx, runID)
-	if err != nil {
-		return ""
-	}
-	for i := len(steps) - 1; i >= 0; i-- {
-		st := &steps[i]
-		if st.Status != "succeeded" || len(st.OutputJSON) == 0 {
-			continue
-		}
-		var out struct {
-			CertificateID string `json:"certificate_id"`
-		}
-		if json.Unmarshal([]byte(st.OutputJSON), &out) == nil && out.CertificateID != "" {
-			return out.CertificateID
-		}
-	}
-	return ""
-}
-
-func (r *WorkflowRunner) createInlineCertificate(ctx context.Context, cfg ApplyStepConfig) (string, error) {
-	primary, err := certificate.NormalizeDomain(cfg.PrimaryDomain)
-	if err != nil {
-		return "", err
-	}
-	if existing, err := r.Store.SearchCertificatesByDomain(ctx, primary); err == nil && existing != nil {
-		return existing.ID, nil
-	}
-	autoRenew := true
-	if cfg.AutoRenew != nil {
-		autoRenew = *cfg.AutoRenew
-	}
-	c, err := r.Service.CreateCertificate(ctx, CertInput{
-		Name: cfg.Name, PrimaryDomain: cfg.PrimaryDomain, SAN: cfg.SAN, KeyType: cfg.KeyType,
-		CAAccountID: cfg.CAAccountID, ChallengeType: cfg.ChallengeType,
-		DNSCredentialID: cfg.DNSCredentialID, Webroot: cfg.Webroot, AutoRenew: autoRenew,
-	})
-	if err != nil {
-		return "", err
-	}
-	return c.ID, nil
-}
-
-func groupSteps(steps []WorkflowStep) [][]WorkflowStep {
-	var groups [][]WorkflowStep
-	last := ""
-	for _, step := range steps {
-		if step.ParallelGroup != "" && step.ParallelGroup == last {
-			groups[len(groups)-1] = append(groups[len(groups)-1], step)
-			continue
-		}
-		groups = append(groups, []WorkflowStep{step})
-		last = step.ParallelGroup
-	}
-	return groups
-}
-
-func renderWorkflowText(tpl string, run *store.WorkflowRun, step WorkflowStep) string {
-	r := strings.NewReplacer(
-		"{{run_id}}", run.ID,
-		"{{workflow_id}}", run.WorkflowID,
-		"{{step_id}}", step.ID,
-		"{{trigger}}", run.TriggerType,
-	)
-	return r.Replace(tpl)
-}
-
-func mustJSON(v any) string {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return "{}"
-	}
-	return string(raw)
 }

@@ -1268,13 +1268,18 @@ components:
           type: array
           description: v2 graph edges.
           items: { $ref: "#/components/schemas/WorkflowEdge" }
+        allow_multiple_starts:
+          type: boolean
+          description: Allow more than one root node. False by default so an unconnected node cannot become an accidental start node.
     WorkflowInput:
       type: object
       required: [name, definition]
       properties:
         name: { type: string }
         description: { type: string }
-        enabled: { type: boolean }
+        enabled:
+          type: boolean
+          description: Defaults to true on create; omitted on update preserves the current value.
         trigger_type: { type: string, enum: [manual, schedule] }
         schedule: { type: string }
         definition: { $ref: "#/components/schemas/WorkflowDefinition" }
@@ -1319,6 +1324,9 @@ components:
         error: { type: [string, "null"] }
         started_at: { type: [integer, "null"] }
         finished_at: { type: [integer, "null"] }
+        available_at:
+          type: integer
+          description: Unix time after which a pending step may be retried.
     WorkflowRunDetail:
       type: object
       properties:

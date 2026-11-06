@@ -788,6 +788,20 @@ REST + JSON，异步操作返回 `202 Accepted` + `job_id`。
 
 ---
 
+### 6.11 流水线（Workflow）
+
+流水线是叠加在持久化任务队列之上的编排层，不直接执行 acme.sh：
+
+- `workflows.definition_json` 保存可编辑定义，创建运行时把定义快照写入 `workflow_runs.definition_json`，因此编辑不会影响进行中的运行。
+- 支持旧版 `steps`（v1 有序步骤）和 `nodes/edges`（v2 图）。v2 节点条件边支持 `success`、`failure`、`always`；没有入边的节点是起始节点。
+- 为避免“新增/删除节点后忘记连线导致提前执行”，v2 默认只允许一个起始节点；需要多个入口时必须显式设置 `allow_multiple_starts`。
+- `continue_on_error` 与旧版顺序执行保持一致：失败节点仍可被 `success` 边继续使用，且不会打开 `failure` 分支；最终运行状态为 `partial`。
+- apply/deploy 只入队现有 job，并通过 job id 回查结果。apply 成功后会记录 `certificate_id` 和 `revision_id`；deploy/verify 优先继承上游节点的证书和 revision，避免并发续期导致部署错版本。
+- 每个工作流同一时间只允许一个 `queued/running` 运行（数据库唯一索引）。runner 使用 owner lease + heartbeat 支持 serve/worker 共享数据库以及崩溃后恢复。
+- 取消运行会取消该 run 的幂等键前缀下所有 `queued` job；正在运行的 job 无法被 worker 中断，但不会再启动后续步骤。
+- 定时触发按服务器本地时区扫描，只对 `trigger_type='schedule'` 的运行做 60 秒去重；手动运行不会吞掉定时触发。
+- 步骤遇到“另一个操作进行中”、限流、连接超时等临时错误时，按 15/30 秒退避重试，最多 3 次尝试；运行记录按 `retention_days` 清理。
+
 ## 7. 安全威胁模型
 
 | 威胁 | 影响 | 缓解 |

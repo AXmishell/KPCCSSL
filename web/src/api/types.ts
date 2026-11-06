@@ -227,6 +227,7 @@ export interface WorkflowDefinition {
   steps?: WorkflowStep[];
   nodes?: WorkflowNode[];
   edges?: WorkflowEdge[];
+  allow_multiple_starts?: boolean;
 }
 
 export interface Workflow {
@@ -266,6 +267,7 @@ export interface WorkflowStepRun {
   error: string | null;
   started_at: number | null;
   finished_at: number | null;
+  available_at?: number;
 }
 
 export interface WorkflowRunDetail {

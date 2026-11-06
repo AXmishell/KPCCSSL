@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,6 +45,86 @@ func TestUsersAndAudit(t *testing.T) {
 	logs, err := st.ListAudit(ctx, 10, 0, "")
 	if err != nil || len(logs) != 1 {
 		t.Fatalf("logs=%v err=%v", logs, err)
+	}
+}
+
+func TestWorkflowRunQueriesAndJobCancellation(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	w := &Workflow{ID: "w1", Name: "wf", DefinitionJSON: `{"version":2,"nodes":[]}`, Enabled: true, TriggerType: "manual", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateWorkflow(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	run := &WorkflowRun{ID: "r1", WorkflowID: w.ID, Status: "queued", TriggerType: "manual", DefinitionJSON: w.DefinitionJSON, CreatedAt: now}
+	if err := st.CreateWorkflowRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := st.ActiveWorkflowRun(ctx, w.ID); err != nil || !active {
+		t.Fatalf("active=%v err=%v", active, err)
+	}
+	if recent, err := st.RecentWorkflowRun(ctx, w.ID, "schedule", now-60); err != nil || recent {
+		t.Fatalf("manual run counted as schedule: recent=%v err=%v", recent, err)
+	}
+	if recent, err := st.RecentWorkflowRun(ctx, w.ID, "manual", now-60); err != nil || !recent {
+		t.Fatalf("manual run not found: recent=%v err=%v", recent, err)
+	}
+	if latest, err := st.LatestWorkflowRuns(ctx); err != nil || latest[w.ID] == nil || latest[w.ID].ID != run.ID {
+		t.Fatalf("latest=%v err=%v", latest, err)
+	}
+
+	for i, key := range []string{"workflow:r1:a", "workflow:r1:b", "workflow:r2:a"} {
+		k := key
+		j := &Job{ID: fmt.Sprintf("job-%d", i), Type: "deploy", Status: "queued", CreatedAt: now, AvailableAt: now, IdempotencyKey: &k}
+		if _, err := st.CreateJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := st.CancelJobsByPrefix(ctx, "workflow:r1:", "", now)
+	if err != nil || n != 2 {
+		t.Fatalf("canceled=%d err=%v", n, err)
+	}
+	j, err := st.GetJob(ctx, "job-0")
+	if err != nil || j.Status != "canceled" {
+		t.Fatalf("job-0=%+v err=%v", j, err)
+	}
+	if j, err := st.GetJob(ctx, "job-2"); err != nil || j.Status != "queued" {
+		t.Fatalf("unrelated job canceled: %+v err=%v", j, err)
+	}
+}
+
+func TestWorkflowStepRetryAvailability(t *testing.T) {
+	st, ctx := testStore(t)
+	now := Now()
+	w := &Workflow{ID: "w-retry", Name: "wf", DefinitionJSON: `{"version":2,"nodes":[]}`, Enabled: true, TriggerType: "manual", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateWorkflow(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateWorkflowRun(ctx, &WorkflowRun{ID: "r-retry", WorkflowID: w.ID, Status: "queued", TriggerType: "manual", DefinitionJSON: w.DefinitionJSON, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	step := &WorkflowStepRun{ID: "s-retry", RunID: "r-retry", StepID: "s", Type: "wait", Name: "s", Status: "pending", CreatedAt: now}
+	if err := st.CreateStepRun(ctx, step); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartStepRun(ctx, step.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	msg := "another operation is in progress"
+	if err := st.RetryStepRun(ctx, step.ID, now+60, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartStepRun(ctx, step.ID, now); err != ErrConflict {
+		t.Fatalf("early start = %v, want ErrConflict", err)
+	}
+	if err := st.StartStepRun(ctx, step.ID, now+61); err != nil {
+		t.Fatalf("retry start: %v", err)
+	}
+	got, err := st.GetStepRun(ctx, "r-retry", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Attempts != 2 || got.Status != "running" {
+		t.Fatalf("step = %+v", got)
 	}
 }
 

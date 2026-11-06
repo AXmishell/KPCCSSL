@@ -162,7 +162,7 @@ func (s *Store) RecoverWorkflowRuns(ctx context.Context, before int64) (int64, e
 	defer tx.Rollback()
 	// Only steal runs whose owner stopped heartbeating. This lets serve and
 	// worker share a database without resetting each other's live runs.
-	if _, err := tx.ExecContext(ctx, `UPDATE workflow_step_runs SET status='pending', started_at=NULL
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow_step_runs SET status='pending', started_at=NULL, available_at=0
 		WHERE status='running' AND run_id IN (
 			SELECT id FROM workflow_runs
 			WHERE status='running' AND (heartbeat_at IS NULL OR heartbeat_at < ?)
@@ -178,11 +178,63 @@ func (s *Store) RecoverWorkflowRuns(ctx context.Context, before int64) (int64, e
 	return n, tx.Commit()
 }
 
-// RecentWorkflowRun reports whether a workflow was triggered after since.
-func (s *Store) RecentWorkflowRun(ctx context.Context, workflowID string, since int64) (bool, error) {
+// RecentWorkflowRun reports whether a workflow was triggered after since. When
+// trigger is non-empty only runs with that trigger type are considered, so a
+// manual run cannot suppress a scheduled one.
+func (s *Store) RecentWorkflowRun(ctx context.Context, workflowID, trigger string, since int64) (bool, error) {
+	q := `SELECT COUNT(*) FROM workflow_runs WHERE workflow_id=? AND created_at>=?`
+	args := []any{workflowID, since}
+	if trigger != "" {
+		q += ` AND trigger_type=?`
+		args = append(args, trigger)
+	}
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_runs WHERE workflow_id=? AND created_at>=?`, workflowID, since).Scan(&n)
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(&n)
 	return n > 0, err
+}
+
+// ActiveWorkflowRun reports whether a workflow has a queued or running run.
+func (s *Store) ActiveWorkflowRun(ctx context.Context, workflowID string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_runs
+		WHERE workflow_id=? AND status IN ('queued','running')`, workflowID).Scan(&n)
+	return n > 0, err
+}
+
+// LatestWorkflowRuns returns the most recent run for every workflow in one
+// query. It avoids the N+1 lookups performed by listing runs per workflow.
+func (s *Store) LatestWorkflowRuns(ctx context.Context) (map[string]*WorkflowRun, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,workflow_id,status,trigger_type,definition_json,owner,error,started_at,finished_at,heartbeat_at,created_at
+		FROM (
+			SELECT *, ROW_NUMBER() OVER (
+				PARTITION BY workflow_id ORDER BY created_at DESC, rowid DESC
+			) AS rn
+			FROM workflow_runs
+		) WHERE rn=1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]*WorkflowRun{}
+	for rows.Next() {
+		r, err := s.scanWorkflowRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[r.WorkflowID] = r
+	}
+	return out, rows.Err()
+}
+
+// CleanupWorkflowRuns deletes terminal runs older than cutoff. Step runs are
+// removed by the foreign-key cascade.
+func (s *Store) CleanupWorkflowRuns(ctx context.Context, cutoff int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM workflow_runs
+		WHERE status IN ('succeeded','failed','partial','canceled') AND created_at < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // CancelWorkflowRun cancels a queued/running run and its unfinished steps.
@@ -214,11 +266,14 @@ func (s *Store) CreateStepRun(ctx context.Context, step *WorkflowStepRun) error 
 	if step.OutputJSON == "" {
 		step.OutputJSON = "{}"
 	}
+	if step.AvailableAt == 0 {
+		step.AvailableAt = step.CreatedAt
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_step_runs
-		(id,run_id,step_id,type,name,status,attempts,job_ids_json,output_json,error,started_at,finished_at,created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(id,run_id,step_id,type,name,status,attempts,job_ids_json,output_json,error,started_at,finished_at,available_at,created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		step.ID, step.RunID, step.StepID, step.Type, step.Name, step.Status, step.Attempts,
-		step.JobIDsJSON, step.OutputJSON, step.Error, step.StartedAt, step.FinishedAt, step.CreatedAt)
+		step.JobIDsJSON, step.OutputJSON, step.Error, step.StartedAt, step.FinishedAt, step.AvailableAt, step.CreatedAt)
 	return err
 }
 
@@ -247,7 +302,25 @@ func (s *Store) GetStepRun(ctx context.Context, runID, stepID string) (*Workflow
 
 // StartStepRun moves a pending step to running and increments attempts.
 func (s *Store) StartStepRun(ctx context.Context, id string, now int64) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE workflow_step_runs SET status='running',attempts=attempts+1,started_at=?,error=NULL WHERE id=? AND status='pending'`, now, id)
+	res, err := s.db.ExecContext(ctx, `UPDATE workflow_step_runs
+		SET status='running',attempts=attempts+1,started_at=?,available_at=0,error=NULL
+		WHERE id=? AND status='pending' AND available_at<=?`, now, id, now)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
+// RetryStepRun puts a running step back into pending with a backoff. The step
+// keeps attempts and the last error so the UI can show why it is waiting.
+func (s *Store) RetryStepRun(ctx context.Context, id string, availableAt int64, errMsg *string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE workflow_step_runs
+		SET status='pending',started_at=NULL,finished_at=NULL,available_at=?,error=?
+		WHERE id=? AND status='running'`, availableAt, errMsg, id)
 	if err != nil {
 		return err
 	}
@@ -278,7 +351,7 @@ func (s *Store) FinishStepRun(ctx context.Context, id, status, outputJSON string
 	if outputJSON == "" {
 		outputJSON = "{}"
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE workflow_step_runs SET status=?,output_json=?,error=?,finished_at=? WHERE id=? AND status IN ('pending','running')`, status, outputJSON, errMsg, now, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE workflow_step_runs SET status=?,output_json=?,error=?,finished_at=?,available_at=0 WHERE id=? AND status IN ('pending','running')`, status, outputJSON, errMsg, now, id)
 	return err
 }
 
@@ -318,13 +391,13 @@ func (s *Store) scanWorkflowRun(row interface{ Scan(...any) error }) (*WorkflowR
 	return &r, nil
 }
 
-const workflowStepCols = `SELECT id,run_id,step_id,type,name,status,attempts,job_ids_json,output_json,error,started_at,finished_at,created_at FROM workflow_step_runs`
+const workflowStepCols = `SELECT id,run_id,step_id,type,name,status,attempts,job_ids_json,output_json,error,started_at,finished_at,available_at,created_at FROM workflow_step_runs`
 
 func (s *Store) scanStepRun(row interface{ Scan(...any) error }) (*WorkflowStepRun, error) {
 	var st WorkflowStepRun
 	var errMsg sql.NullString
 	var started, finished sql.NullInt64
-	if err := row.Scan(&st.ID, &st.RunID, &st.StepID, &st.Type, &st.Name, &st.Status, &st.Attempts, &st.JobIDsJSON, &st.OutputJSON, &errMsg, &started, &finished, &st.CreatedAt); err != nil {
+	if err := row.Scan(&st.ID, &st.RunID, &st.StepID, &st.Type, &st.Name, &st.Status, &st.Attempts, &st.JobIDsJSON, &st.OutputJSON, &errMsg, &started, &finished, &st.AvailableAt, &st.CreatedAt); err != nil {
 		return nil, notFound(err)
 	}
 	st.Error = nullPtr(errMsg)

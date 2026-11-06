@@ -198,19 +198,20 @@ type WorkflowRun struct {
 
 // WorkflowStepRun is the durable state of one step in a workflow run.
 type WorkflowStepRun struct {
-	ID         string  `json:"id"`
-	RunID      string  `json:"run_id"`
-	StepID     string  `json:"step_id"`
-	Type       string  `json:"type"`
-	Name       string  `json:"name"`
-	Status     string  `json:"status"`
-	Attempts   int     `json:"attempts"`
-	JobIDsJSON string  `json:"-"`
-	OutputJSON string  `json:"output_json"`
-	Error      *string `json:"error"`
-	StartedAt  *int64  `json:"started_at"`
-	FinishedAt *int64  `json:"finished_at"`
-	CreatedAt  int64   `json:"created_at"`
+	ID          string  `json:"id"`
+	RunID       string  `json:"run_id"`
+	StepID      string  `json:"step_id"`
+	Type        string  `json:"type"`
+	Name        string  `json:"name"`
+	Status      string  `json:"status"`
+	Attempts    int     `json:"attempts"`
+	JobIDsJSON  string  `json:"-"`
+	OutputJSON  string  `json:"output_json"`
+	Error       *string `json:"error"`
+	StartedAt   *int64  `json:"started_at"`
+	FinishedAt  *int64  `json:"finished_at"`
+	AvailableAt int64   `json:"available_at"`
+	CreatedAt   int64   `json:"created_at"`
 }
 
 type AuditLog struct {

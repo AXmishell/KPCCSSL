@@ -155,10 +155,16 @@ func (s *Scheduler) Run(ctx context.Context) {
 				slog.Warn("session cleanup failed", "error", err)
 			}
 			if days := s.Service.SettingInt(ctx, "retention_days", s.Service.Cfg.RetentionDays); days > 0 {
-				if n, err := s.Service.Logs.Cleanup(time.Now().AddDate(0, 0, -days)); err != nil {
+				cutoff := time.Now().AddDate(0, 0, -days)
+				if n, err := s.Service.Logs.Cleanup(cutoff); err != nil {
 					slog.Warn("log cleanup failed", "error", err)
 				} else if n > 0 {
 					slog.Info("removed old job logs", "count", n)
+				}
+				if n, err := s.Store.CleanupWorkflowRuns(ctx, cutoff.Unix()); err != nil {
+					slog.Warn("workflow run cleanup failed", "error", err)
+				} else if n > 0 {
+					slog.Info("removed old workflow runs", "count", n)
 				}
 			}
 			s.Service.Limiter.Cleanup()

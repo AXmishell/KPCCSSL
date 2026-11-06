@@ -465,6 +465,40 @@ func TestWorkflowGraphConnection(t *testing.T) {
 	}
 }
 
+func TestDeleteWorkflowRejectsActiveRun(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	definition := map[string]any{
+		"version": 2,
+		"nodes": []map[string]any{
+			{"id": "start", "type": "wait", "name": "start", "config": map[string]any{"seconds": 1}},
+		},
+	}
+	data = h.mustDo(t, "POST", "/workflows", map[string]any{
+		"name": "Delete guard", "trigger_type": "manual", "definition": definition,
+	}, me.CSRF, http.StatusCreated)
+	var wf struct {
+		ID      string `json:"id"`
+		Enabled bool   `json:"enabled"`
+	}
+	_ = json.Unmarshal(data, &wf)
+	if !wf.Enabled {
+		t.Fatal("workflow should default to enabled when enabled is omitted")
+	}
+	if _, err := h.svc.RunWorkflow(context.Background(), wf.ID); err != nil {
+		t.Fatal(err)
+	}
+	status, body := h.do(t, "DELETE", "/workflows/"+wf.ID, nil, me.CSRF)
+	if status != http.StatusConflict {
+		t.Fatalf("delete active workflow: status %d body %s", status, body)
+	}
+}
+
 func TestDeploymentLocalFile(t *testing.T) {
 	h := newHarness(t)
 	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
