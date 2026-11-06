@@ -78,6 +78,66 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/AuthResult" }
         "401": { $ref: "#/components/responses/Problem" }
+  /auth/forgot-password:
+    post:
+      security: []
+      operationId: forgotPassword
+      description: Sends a reset link when the account exists. The response is the same for unknown accounts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "204": { description: Request accepted }
+        "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /auth/reset-password:
+    post:
+      security: []
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 12 }
+      responses:
+        "204": { description: Password reset; all sessions were signed out }
+        "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /auth/confirm-email:
+    post:
+      security: []
+      operationId: confirmEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Email changed; all sessions were signed out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  email: { type: string }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /auth/logout:
     post:
       operationId: logout
@@ -130,6 +190,26 @@ paths:
       responses:
         "204": { description: Password changed }
         "401": { $ref: "#/components/responses/Problem" }
+  /me/email:
+    post:
+      operationId: requestEmailChange
+      description: Sends a verification link to the new address. The change applies only after confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "204": { description: Verification email sent }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /me/totp/setup:
     post:
       operationId: totpSetup
@@ -676,6 +756,82 @@ paths:
       responses:
         "204": { description: Connection test succeeded }
         "400": { $ref: "#/components/responses/Problem" }
+  /deployment-credentials:
+    get:
+      operationId: listDeploymentCredentials
+      responses:
+        "200":
+          description: Deployment credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DeploymentCredential" }
+                  types:
+                    type: array
+                    items: { type: string }
+    post:
+      operationId: createDeploymentCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentCredentialInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentCredential" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /deployment-credentials/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateDeploymentCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentCredentialInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentCredential" }
+    delete:
+      operationId: deleteDeploymentCredential
+      responses:
+        "204": { description: Deleted }
+        "409": { $ref: "#/components/responses/Problem" }
+  /deployment-credentials/test:
+    post:
+      operationId: testDeploymentCredentialConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, config]
+              properties:
+                type: { type: string }
+                config: { type: object, additionalProperties: true }
+      responses:
+        "204": { description: Connection test succeeded }
+        "400": { $ref: "#/components/responses/Problem" }
+  /deployment-credentials/{id}/test:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: testDeploymentCredential
+      responses:
+        "204": { description: Connection test succeeded }
+        "400": { $ref: "#/components/responses/Problem" }
   /notification-channels:
     get:
       operationId: listNotificationChannels
@@ -784,6 +940,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
+  /users/{id}/password-reset:
+    post:
+      operationId: adminSendPasswordReset
+      description: Sends a password reset link to the user's registered address.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Reset email sent }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /workflows:
     get:
       operationId: listWorkflows
@@ -944,6 +1111,22 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+  /settings/mail-test:
+    post:
+      operationId: testMail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to: { type: string, format: email }
+      responses:
+        "204": { description: Test email sent }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /system/info:
     get:
       operationId: systemInfo
@@ -1180,8 +1363,14 @@ components:
             - 1panel_site
             - tencent_cdn
             - tencent_waf
+            - tencent_cos
+            - tencent_teo
             - aliyun_cdn
             - aliyun_waf
+            - aliyun_oss
+            - aliyun_dcdn
+            - qiniu_cdn
+        credential_id: { type: [string, "null"] }
         enabled: { type: boolean }
         last_run_at: { type: [integer, "null"] }
         last_status: { type: [string, "null"] }
@@ -1204,16 +1393,42 @@ components:
             - 1panel_site
             - tencent_cdn
             - tencent_waf
+            - tencent_cos
+            - tencent_teo
             - aliyun_cdn
             - aliyun_waf
+            - aliyun_oss
+            - aliyun_dcdn
+            - qiniu_cdn
         config: { type: object, additionalProperties: true }
         enabled: { type: boolean }
+    DeploymentCredential:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [tencent, aliyun, qiniu, baota, "1panel", ssh] }
+        configured_fields:
+          type: array
+          items: { type: string }
+        public_config:
+          type: object
+          additionalProperties: true
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    DeploymentCredentialInput:
+      type: object
+      required: [name, type, config]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [tencent, aliyun, qiniu, baota, "1panel", ssh] }
+        config: { type: object, additionalProperties: true }
     NotificationChannel:
       type: object
       properties:
         id: { type: string }
         name: { type: string }
-        type: { type: string, enum: [smtp, webhook, telegram] }
+        type: { type: string, enum: [smtp, webhook, telegram, feishu, dingtalk, wecom] }
         events:
           type: array
           items: { type: string }

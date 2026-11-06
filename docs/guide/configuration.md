@@ -78,6 +78,23 @@ deploy_roots:
 | `KPCC_DEV` | `false` | 关闭 Secure cookie / 允许 http CA URL，仅本地 |
 | `KPCC_FAKE_ACME` | `false` | 使用内置 fake 引擎，仅开发/E2E |
 
+## 邮件服务（密码重置 / 邮箱验证）
+
+在 Web 界面的“设置 → 邮件服务”配置 SMTP，保存后可用“发送测试邮件”验证：
+
+| 设置键 | 说明 |
+|---|---|
+| `smtp_host` | SMTP 服务器地址 |
+| `smtp_port` | 端口，默认 587 |
+| `smtp_tls` | `starttls`（默认）、`tls` 或 `none` |
+| `smtp_username` | 登录用户名，可留空 |
+| `smtp_password` | 登录密码，AES-256-GCM 加密存储，界面显示为 `********` |
+| `smtp_from` | 发件地址，例如 `no-reply@example.com` |
+
+- 未配置发信时，找回密码和“发送重置邮件”会返回 `E_MAIL_NOT_CONFIGURED`。
+- 重置链接默认 30 分钟有效，邮箱验证链接 24 小时有效，均为一次性令牌；使用后清空该用户全部会话。
+- 生产环境请设置 `KPCC_BASE_URL`。未设置时会回退到请求的 Host 生成邮件链接。
+
 ## 数据布局
 
 ```text

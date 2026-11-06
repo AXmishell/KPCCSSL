@@ -11,6 +11,8 @@ import type {
   CertEvent,
   Dashboard,
   Deployment,
+  DeploymentCredential,
+  DeploymentCredentialType,
   DNSCredential,
   DNSProvider,
   Job,
@@ -35,6 +37,7 @@ export const qk = {
   jobs: (params: string) => ["jobs", params] as const,
   job: (id: string) => ["job", id] as const,
   deployments: (certId?: string) => ["deployments", certId ?? "all"] as const,
+  deploymentCredentials: ["deployment-credentials"] as const,
   notifications: ["notifications"] as const,
   audit: ["audit"] as const,
   settings: ["settings"] as const,
@@ -143,6 +146,14 @@ export function useNotifications() {
   return useQuery({
     queryKey: qk.notifications,
     queryFn: () => request<{ items: NotificationChannel[]; events: string[] }>("/notification-channels"),
+  });
+}
+
+export function useDeploymentCredentials() {
+  return useQuery({
+    queryKey: qk.deploymentCredentials,
+    queryFn: () =>
+      request<{ items: DeploymentCredential[]; types: DeploymentCredentialType[] }>("/deployment-credentials"),
   });
 }
 

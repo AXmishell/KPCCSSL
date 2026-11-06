@@ -1,11 +1,13 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { errorMessage, request } from "@/api/client";
-import type { DeploymentType } from "@/api/types";
+import { useDeploymentCredentials } from "@/api/queries";
+import type { DeploymentCredentialType, DeploymentType } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Field, Input, Select, Textarea } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { ErrorBox } from "@/components/ui/misc";
 import { Switch } from "@/components/ui/switch";
 
@@ -20,11 +22,26 @@ const TYPES: DeploymentType[] = [
   "aliyun_cdn",
   "tencent_waf",
   "aliyun_waf",
+  "tencent_cos",
+  "tencent_teo",
+  "aliyun_oss",
+  "aliyun_dcdn",
+  "qiniu_cdn",
   "reload",
   "webhook",
 ];
 
 const RELOAD_TARGETS = ["none", "nginx", "systemd-nginx", "systemd-apache", "apache"];
+
+function credentialTypeFor(type: DeploymentType): DeploymentCredentialType | null {
+  if (type.startsWith("tencent_")) return "tencent";
+  if (type.startsWith("aliyun_")) return "aliyun";
+  if (type === "qiniu_cdn") return "qiniu";
+  if (type.startsWith("baota_")) return "baota";
+  if (type.startsWith("1panel_")) return "1panel";
+  if (type === "ssh") return "ssh";
+  return null;
+}
 
 export function DeploymentDialog({
   open,
@@ -38,8 +55,10 @@ export function DeploymentDialog({
   onCreated: () => void;
 }) {
   const { t } = useTranslation();
+  const { data: credentials } = useDeploymentCredentials();
   const [type, setType] = React.useState<DeploymentType>("local_file");
   const [name, setName] = React.useState("");
+  const [credentialId, setCredentialId] = React.useState("");
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
@@ -58,36 +77,38 @@ export function DeploymentDialog({
   const [url, setUrl] = React.useState("");
   const [secret, setSecret] = React.useState("");
 
-  // SSH.
-  const [host, setHost] = React.useState("");
-  const [port, setPort] = React.useState("22");
-  const [user, setUser] = React.useState("root");
-  const [authMode, setAuthMode] = React.useState("key");
-  const [password, setPassword] = React.useState("");
-  const [privateKey, setPrivateKey] = React.useState("");
-  const [passphrase, setPassphrase] = React.useState("");
-  const [hostKey, setHostKey] = React.useState("");
-  const [ignoreHostKey, setIgnoreHostKey] = React.useState(false);
-
   // Panels.
-  const [panelUrl, setPanelUrl] = React.useState("");
-  const [apiKey, setApiKey] = React.useState("");
-  const [ignoreTls, setIgnoreTls] = React.useState(false);
-  const [panelVersion, setPanelVersion] = React.useState("v1");
   const [siteNames, setSiteNames] = React.useState("");
   const [siteId, setSiteId] = React.useState("");
 
   // Cloud.
-  const [secretId, setSecretId] = React.useState("");
-  const [cloudSecret, setCloudSecret] = React.useState("");
   const [region, setRegion] = React.useState("");
   const [domain, setDomain] = React.useState("");
+  const [bucket, setBucket] = React.useState("");
+
+  const credentialType = credentialTypeFor(type);
+  const availableCredentials = React.useMemo(
+    () => (credentials?.items ?? []).filter((c) => c.type === credentialType),
+    [credentials, credentialType],
+  );
+
+  React.useEffect(() => {
+    if (!credentialType) {
+      setCredentialId("");
+      return;
+    }
+    setCredentialId((prev) =>
+      availableCredentials.some((c) => c.id === prev) ? prev : (availableCredentials[0]?.id ?? ""),
+    );
+  }, [credentialType, availableCredentials]);
 
   const isSSH = type === "ssh";
   const isBaota = type === "baota_panel" || type === "baota_site";
   const isOnePanel = type === "1panel_panel" || type === "1panel_site";
-  const isTencent = type === "tencent_cdn" || type === "tencent_waf";
-  const isAliyun = type === "aliyun_cdn" || type === "aliyun_waf";
+  const isTencent = type.startsWith("tencent_");
+  const isAliyun = type.startsWith("aliyun_");
+  const isQiniu = type === "qiniu_cdn";
+  const needsBucket = type === "tencent_cos" || type === "aliyun_oss";
   const fileLike = type === "local_file" || isSSH;
 
   const buildConfig = (): Record<string, unknown> | null => {
@@ -108,16 +129,11 @@ export function DeploymentDialog({
     if (type === "webhook") {
       return { url, secret };
     }
-    if (type === "ssh") {
+    if (!credentialType) return null;
+
+    if (isSSH) {
       return {
-        host,
-        port: Number(port) || 22,
-        user,
-        password: authMode === "password" ? password : "",
-        private_key: authMode === "key" ? privateKey : "",
-        passphrase: authMode === "key" ? passphrase : "",
-        host_key_sha256: hostKey,
-        insecure_ignore_host_key: ignoreHostKey,
+        credential_id: credentialId,
         directory: dir,
         cert_file: certFile,
         key_file: keyFile,
@@ -129,9 +145,7 @@ export function DeploymentDialog({
     }
     if (isBaota) {
       return {
-        url: panelUrl,
-        api_key: apiKey,
-        ignore_tls: ignoreTls,
+        credential_id: credentialId,
         site_names: type === "baota_site"
           ? siteNames.split(",").map((s) => s.trim()).filter(Boolean)
           : [],
@@ -139,21 +153,17 @@ export function DeploymentDialog({
     }
     if (isOnePanel) {
       return {
-        url: panelUrl,
-        api_key: apiKey,
-        version: panelVersion,
-        ignore_tls: ignoreTls,
+        credential_id: credentialId,
         site_id: type === "1panel_site" ? siteId : "",
       };
     }
-    if (isTencent) {
-      return { secret_id: secretId, secret_key: cloudSecret, region, domain };
+    if (isQiniu) {
+      return { credential_id: credentialId, domain };
     }
-    if (isAliyun) {
-      return { access_key_id: secretId, access_key_secret: cloudSecret, region, domain };
-    }
-    return null;
+    return { credential_id: credentialId, region, domain, bucket: needsBucket ? bucket : "" };
   };
+
+  const missingCredential = Boolean(credentialType) && !credentialId;
 
   const test = async () => {
     const config = buildConfig();
@@ -226,6 +236,31 @@ export function DeploymentDialog({
             </Select>
           </Field>
 
+          {credentialType && (
+            <>
+              <Field
+                label={t("cred.select")}
+                hint={availableCredentials.length ? t("cred.selectHint") : t("cred.noneHint")}
+              >
+                <Select
+                  value={credentialId}
+                  onChange={(e) => setCredentialId(e.target.value)}
+                  disabled={!availableCredentials.length}
+                >
+                  {!availableCredentials.length && <option value="">{t("cred.none")}</option>}
+                  {availableCredentials.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </Select>
+              </Field>
+              <p className="-mt-2 text-xs text-muted-foreground">
+                <Link to="/deployment-credentials" className="text-primary hover:underline">
+                  {t("cred.manage")}
+                </Link>
+              </p>
+            </>
+          )}
+
           {fileLike && (
             <>
               <Field label={t("deploy.directory")}>
@@ -253,55 +288,6 @@ export function DeploymentDialog({
 
           {type === "local_file" && (
             <Toggle label={t("deploy.backup")} checked={backup} onCheckedChange={setBackup} />
-          )}
-
-          {isSSH && (
-            <>
-              <div className="grid grid-cols-3 gap-3">
-                <Field label={t("deploy.host")} className="col-span-2">
-                  <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="10.0.0.10" />
-                </Field>
-                <Field label={t("deploy.port")}>
-                  <Input value={port} onChange={(e) => setPort(e.target.value)} placeholder="22" />
-                </Field>
-              </div>
-              <Field label={t("deploy.user")}>
-                <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="root" />
-              </Field>
-              <Field label={t("deploy.authMode")}>
-                <Select value={authMode} onChange={(e) => setAuthMode(e.target.value)}>
-                  <option value="key">{t("deploy.privateKey")}</option>
-                  <option value="password">{t("deploy.password")}</option>
-                </Select>
-              </Field>
-              {authMode === "key" ? (
-                <>
-                  <Field label={t("deploy.privateKey")} hint={t("deploy.privateKeyHint")}>
-                    <Textarea
-                      value={privateKey}
-                      onChange={(e) => setPrivateKey(e.target.value)}
-                      rows={4}
-                      className="font-mono text-xs"
-                    />
-                  </Field>
-                  <Field label={t("deploy.passphrase")} hint={t("common.optional")}>
-                    <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />
-                  </Field>
-                </>
-              ) : (
-                <Field label={t("deploy.password")}>
-                  <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-                </Field>
-              )}
-              <Field label={t("deploy.hostKey")} hint={t("deploy.hostKeyHint")}>
-                <Input value={hostKey} onChange={(e) => setHostKey(e.target.value)} placeholder="SHA256:..." />
-              </Field>
-              <Toggle
-                label={t("deploy.ignoreHostKey")}
-                checked={ignoreHostKey}
-                onCheckedChange={setIgnoreHostKey}
-              />
-            </>
           )}
 
           {isSSH && (
@@ -337,20 +323,6 @@ export function DeploymentDialog({
 
           {(isBaota || isOnePanel) && (
             <>
-              <Field label={t("deploy.panelUrl")} hint={t("deploy.panelUrlHint")}>
-                <Input value={panelUrl} onChange={(e) => setPanelUrl(e.target.value)} placeholder="https://panel.example.com:8888" />
-              </Field>
-              <Field label={t("deploy.apiKey")}>
-                <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
-              </Field>
-              {isOnePanel && (
-                <Field label={t("deploy.version")}>
-                  <Select value={panelVersion} onChange={(e) => setPanelVersion(e.target.value)}>
-                    <option value="v1">v1</option>
-                    <option value="v2">v2</option>
-                  </Select>
-                </Field>
-              )}
               {type === "baota_site" && (
                 <Field label={t("deploy.siteNames")} hint={t("deploy.siteNamesHint")}>
                   <Input value={siteNames} onChange={(e) => setSiteNames(e.target.value)} placeholder="example.com,www.example.com" />
@@ -361,26 +333,29 @@ export function DeploymentDialog({
                   <Input value={siteId} onChange={(e) => setSiteId(e.target.value)} placeholder="1" />
                 </Field>
               )}
-              <Toggle label={t("deploy.ignoreTls")} checked={ignoreTls} onCheckedChange={setIgnoreTls} />
             </>
           )}
 
-          {(isTencent || isAliyun) && (
+          {(isTencent || isAliyun || isQiniu) && (
             <>
-              <Field label={t("deploy.secretId")}>
-                <Input value={secretId} onChange={(e) => setSecretId(e.target.value)} />
-              </Field>
-              <Field label={t("deploy.secretKey")}>
-                <Input type="password" value={cloudSecret} onChange={(e) => setCloudSecret(e.target.value)} />
-              </Field>
-              <Field label={t("deploy.region")}>
-                <Input
-                  value={region}
-                  onChange={(e) => setRegion(e.target.value)}
-                  placeholder={isTencent ? "ap-beijing" : "cn-hangzhou"}
-                />
-              </Field>
-              <Field label={t("deploy.domain")} hint={t("deploy.domainHint")}>
+              {!isQiniu && (
+                <Field label={t("deploy.region")}>
+                  <Input
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder={isTencent ? "ap-beijing" : "cn-hangzhou"}
+                  />
+                </Field>
+              )}
+              {needsBucket && (
+                <Field label={t("deploy.bucket")} hint={t("deploy.bucketHint")}>
+                  <Input value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-bucket" />
+                </Field>
+              )}
+              <Field
+                label={needsBucket ? t("deploy.domainOss") : t("deploy.domain")}
+                hint={needsBucket ? t("deploy.domainOssHint") : t("deploy.domainHint")}
+              >
                 <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="cdn.example.com" />
               </Field>
             </>
@@ -388,10 +363,10 @@ export function DeploymentDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
-          <Button variant="outline" onClick={test} disabled={busy || testing}>
+          <Button variant="outline" onClick={test} disabled={busy || testing || missingCredential}>
             {testing ? t("deploy.testing") : t("deploy.test")}
           </Button>
-          <Button onClick={submit} disabled={busy || testing}>{t("common.save")}</Button>
+          <Button onClick={submit} disabled={busy || testing || missingCredential}>{t("common.save")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

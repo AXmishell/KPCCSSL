@@ -140,14 +140,20 @@ export type DeploymentType =
   | "1panel_site"
   | "tencent_cdn"
   | "tencent_waf"
+  | "tencent_cos"
+  | "tencent_teo"
   | "aliyun_cdn"
-  | "aliyun_waf";
+  | "aliyun_waf"
+  | "aliyun_oss"
+  | "aliyun_dcdn"
+  | "qiniu_cdn";
 
 export interface Deployment {
   id: string;
   certificate_id: string;
   name: string;
   type: DeploymentType;
+  credential_id: string | null;
   enabled: boolean;
   last_run_at: number | null;
   last_status: string | null;
@@ -155,10 +161,22 @@ export interface Deployment {
   updated_at: number;
 }
 
+export type DeploymentCredentialType = "tencent" | "aliyun" | "qiniu" | "baota" | "1panel" | "ssh";
+
+export interface DeploymentCredential {
+  id: string;
+  name: string;
+  type: DeploymentCredentialType;
+  configured_fields: string[];
+  public_config: Record<string, string | number | boolean>;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface NotificationChannel {
   id: string;
   name: string;
-  type: "smtp" | "webhook" | "telegram";
+  type: "smtp" | "webhook" | "telegram" | "feishu" | "dingtalk" | "wecom";
   events: string[];
   enabled: boolean;
   created_at: number;

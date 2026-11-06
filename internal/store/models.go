@@ -138,6 +138,7 @@ type Deployment struct {
 	CertificateID string  `json:"certificate_id"`
 	Name          string  `json:"name"`
 	Type          string  `json:"type"`
+	CredentialID  *string `json:"credential_id"`
 	ConfigEnc     string  `json:"-"`
 	KeyVersion    int     `json:"-"`
 	Enabled       bool    `json:"enabled"`
@@ -145,6 +146,18 @@ type Deployment struct {
 	LastStatus    *string `json:"last_status"`
 	CreatedAt     int64   `json:"created_at"`
 	UpdatedAt     int64   `json:"updated_at"`
+}
+
+// DeploymentCredential is a reusable authentication secret for deployment
+// targets. ConfigEnc is never returned by the API.
+type DeploymentCredential struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	ConfigEnc  string `json:"-"`
+	KeyVersion int    `json:"-"`
+	CreatedAt  int64  `json:"created_at"`
+	UpdatedAt  int64  `json:"updated_at"`
 }
 
 type DeploymentRun struct {

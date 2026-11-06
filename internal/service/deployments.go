@@ -40,7 +40,8 @@ func (s *Service) CreateDeployment(ctx context.Context, certID string, in Deploy
 	now := store.Now()
 	d := &store.Deployment{
 		ID: id.New(), CertificateID: certID, Name: in.Name, Type: in.Type,
-		Enabled: in.Enabled, KeyVersion: s.Box.Version(), CreatedAt: now, UpdatedAt: now,
+		CredentialID: credentialIDFromConfig(in.Config),
+		Enabled:      in.Enabled, KeyVersion: s.Box.Version(), CreatedAt: now, UpdatedAt: now,
 	}
 	enc, err := s.Box.Encrypt(in.Config, "deployments:"+d.ID+":config")
 	if err != nil {
@@ -74,6 +75,7 @@ func (s *Service) UpdateDeployment(ctx context.Context, id string, in Deployment
 			return nil, err
 		}
 		d.ConfigEnc, d.KeyVersion = enc, s.Box.Version()
+		d.CredentialID = credentialIDFromConfig(in.Config)
 	}
 	d.Enabled = in.Enabled
 	d.UpdatedAt = store.Now()
@@ -207,4 +209,20 @@ func (s *Service) handleDeploy(ctx context.Context, j *store.Job, log io.Writer)
 	s.AddEvent(ctx, dep.CertificateID, "deployed", fmt.Sprintf("deployed to %s", dep.Name), j.ID)
 	fmt.Fprintf(log, "deployment succeeded\n")
 	return nil
+}
+
+// credentialIDFromConfig extracts the optional credential reference embedded
+// in a deployment config.
+func credentialIDFromConfig(raw json.RawMessage) *string {
+	var ref struct {
+		CredentialID string `json:"credential_id"`
+	}
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		return nil
+	}
+	id := strings.TrimSpace(ref.CredentialID)
+	if id == "" {
+		return nil
+	}
+	return &id
 }

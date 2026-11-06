@@ -122,6 +122,21 @@ func (h *harness) mustDo(t *testing.T, method, path string, body any, csrf strin
 	return data
 }
 
+func (h *harness) login(t *testing.T, email, password string) string {
+	t.Helper()
+	data := h.mustDo(t, "POST", "/auth/login", map[string]string{"email": email, "password": password}, "", http.StatusOK)
+	var res struct {
+		CSRF string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(data, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.CSRF == "" {
+		t.Fatal("missing csrf token")
+	}
+	return res.CSRF
+}
+
 func (h *harness) drainJobs(t *testing.T) {
 	t.Helper()
 	for i := 0; i < 20; i++ {
@@ -554,4 +569,98 @@ func TestDeploymentLocalFile(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPasswordResetAndEmailChange(t *testing.T) {
+	h := newHarness(t)
+	h.mustDo(t, "POST", "/setup", map[string]string{
+		"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple",
+	}, "", http.StatusCreated)
+
+	ctx := context.Background()
+	settings := map[string]any{
+		"smtp_host": "smtp.example.com", "smtp_port": 587, "smtp_username": "mailer",
+		"smtp_password": "secret", "smtp_from": "no-reply@example.com", "smtp_tls": "starttls",
+	}
+	for k, v := range settings {
+		if err := h.svc.SetSetting(ctx, k, v, k == "smtp_password"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type sentMail struct{ To, Subject, Body string }
+	mails := make(chan sentMail, 8)
+	h.svc.MailSender = func(_ context.Context, cfg notify.SMTPConfig, subject, body string) error {
+		if len(cfg.To) != 1 {
+			t.Errorf("expected one recipient, got %v", cfg.To)
+		}
+		mails <- sentMail{To: cfg.To[0], Subject: subject, Body: body}
+		return nil
+	}
+	takeMail := func() sentMail {
+		t.Helper()
+		select {
+		case m := <-mails:
+			return m
+		case <-time.After(3 * time.Second):
+			t.Fatal("expected an outbound email")
+		}
+		return sentMail{}
+	}
+	tokenFrom := func(text string) string {
+		t.Helper()
+		i := strings.Index(text, "?token=")
+		if i < 0 {
+			t.Fatalf("no token in %q", text)
+		}
+		rest := text[i+len("?token="):]
+		if j := strings.IndexAny(rest, "\r\n \t"); j >= 0 {
+			rest = rest[:j]
+		}
+		return rest
+	}
+
+	// Unknown addresses get the same response and no mail.
+	h.mustDo(t, "POST", "/auth/forgot-password", map[string]string{"email": "nobody@example.com"}, "", http.StatusNoContent)
+	select {
+	case m := <-mails:
+		t.Fatalf("mail sent for unknown account: %+v", m)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	h.mustDo(t, "POST", "/auth/forgot-password", map[string]string{"email": "admin@example.com"}, "", http.StatusNoContent)
+	resetMail := takeMail()
+	if resetMail.To != "admin@example.com" {
+		t.Fatalf("reset mail to %q", resetMail.To)
+	}
+	resetToken := tokenFrom(resetMail.Body)
+
+	// A weak password does not consume the token.
+	h.mustDo(t, "POST", "/auth/reset-password", map[string]string{"token": resetToken, "password": "short"}, "", http.StatusUnprocessableEntity)
+	newPassword := "new-correct-horse-battery"
+	h.mustDo(t, "POST", "/auth/reset-password", map[string]string{"token": resetToken, "password": newPassword}, "", http.StatusNoContent)
+	// Tokens are single-use.
+	h.mustDo(t, "POST", "/auth/reset-password", map[string]string{"token": resetToken, "password": newPassword}, "", http.StatusUnprocessableEntity)
+
+	if status, _ := h.do(t, "POST", "/auth/login", map[string]string{"email": "admin@example.com", "password": "correct-horse-battery-staple"}, ""); status != http.StatusUnauthorized {
+		t.Fatalf("old password still works: %d", status)
+	}
+	csrf := h.login(t, "admin@example.com", newPassword)
+
+	// Changing the email requires the current password.
+	if status, _ := h.do(t, "POST", "/me/email", map[string]string{"email": "new@example.com", "password": "wrong-password"}, csrf); status != http.StatusUnauthorized {
+		t.Fatalf("wrong password accepted: %d", status)
+	}
+	h.mustDo(t, "POST", "/me/email", map[string]string{"email": "new@example.com", "password": newPassword}, csrf, http.StatusNoContent)
+	changeMail := takeMail()
+	if changeMail.To != "new@example.com" {
+		t.Fatalf("verification mail to %q", changeMail.To)
+	}
+	confirmToken := tokenFrom(changeMail.Body)
+	h.mustDo(t, "POST", "/auth/confirm-email", map[string]string{"token": confirmToken}, "", http.StatusOK)
+
+	if status, _ := h.do(t, "POST", "/auth/login", map[string]string{"email": "admin@example.com", "password": newPassword}, ""); status != http.StatusUnauthorized {
+		t.Fatalf("old email still works: %d", status)
+	}
+	h.login(t, "new@example.com", newPassword)
 }

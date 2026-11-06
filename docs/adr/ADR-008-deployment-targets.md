@@ -24,14 +24,26 @@ shell 执行。实际使用中，用户需要把证书推送到远程主机、�
    - API key 使用面板签名算法，配置整体由 `secret.Box` 加密。
 3. `1panel_panel` / `1panel_site`：调用 1Panel v1/v2 API。
    - 面板模式更新面板 SSL；站点模式更新指定网站的 HTTPS 配置。
-4. `tencent_cdn` / `tencent_waf`：通过腾讯云 SSL 服务上传证书，再按
-   `cdn` / `waf` 资源类型部署到域名。
-5. `aliyun_cdn` / `aliyun_waf`：通过阿里云 RPC API 更新 CDN 证书；WAF
-   先创建证书，再复制现有 Listen/Redirect 配置并只替换证书 ID。
+4. `tencent_cdn` / `tencent_waf` / `tencent_cos` / `tencent_teo`：通过腾讯云
+   SSL 服务上传证书，再按 `cdn` / `waf` / `cos` / `teo` 资源类型部署。
+   COS 的实例 ID 使用 `region|bucket|domain` 形式。
+5. `aliyun_cdn` / `aliyun_dcdn` / `aliyun_waf`：通过阿里云 RPC API 更新
+   CDN/DCDN 证书；WAF 先创建证书，再复制现有 Listen/Redirect 配置并只替换
+   证书 ID。
+6. `aliyun_oss`：使用 OSS V1 签名调用 `PutBucketCnameWithCertificate`，
+   将证书绑定到 Bucket 的自定义域名。
+7. `qiniu_cdn`：先上传证书到七牛证书库，再调用 `domain/<domain>/sslize`
+   为加速域名启用 HTTPS。
 
 同时新增 `POST /api/v1/deployments/test` 与
 `POST /api/v1/deployments/{id}/test`，用于在不改变目标状态的情况下测试
 凭据和连通性。
+
+认证信息不再重复保存在每个部署目标里：云厂商 AK/SK、面板 API Key 和 SSH
+主机密钥集中在 `deployment_credentials` 表，按 `tencent`、`aliyun`、`qiniu`、
+`baota`、`1panel`、`ssh` 分类。部署目标的 config 只保存 `credential_id` 和
+目标参数（域名、Bucket、站点、目录等），执行时按 `credential_id` 解密并合并
+认证字段。凭据被目标引用时禁止删除。
 
 ## 安全约束
 
@@ -46,8 +58,14 @@ shell 执行。实际使用中，用户需要把证书推送到远程主机、�
 
 ## 后果
 
-- 部署目标类型从 3 种扩展到 12 种，`deployments.type` 的 CHECK 约束需要
-  重建（迁移 `0009_deployment_targets.sql`）。
+- 部署目标类型从 3 种扩展到 17 种，`deployments.type` 的 CHECK 约束需要
+  重建（迁移 `0012_more_targets_and_channels.sql`）。
+- 新增 `deployment_credentials` 表和 `deployments.credential_id` 外键
+  （迁移 `0013_deployment_credentials.sql`）；旧目标仍可使用原来的内联
+  凭据，不会因升级失效。
+- 通知渠道新增 `feishu`、`dingtalk`、`wecom`，同样通过迁移扩展
+  `notification_channels.type` 的 CHECK 约束。机器人 URL 只允许官方
+  HTTPS 域名，避免通知渠道被用作 SSRF 探测。
 - SSH 与云厂商适配器需要额外的网络依赖；失败信息会写入
   `deployment_runs.message`，并触发 `deployment.failed` 通知。
 - 面板/云 API 的版本差异仍需在适配器内处理，新增厂商应按同样的

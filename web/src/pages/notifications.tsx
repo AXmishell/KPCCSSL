@@ -67,7 +67,7 @@ export function NotificationsPage() {
             {data.items.map((ch) => (
               <tr key={ch.id}>
                 <Td className="font-medium">{ch.name}</Td>
-                <Td>{ch.type}</Td>
+                <Td>{t(`notify.${ch.type}`, { defaultValue: ch.type })}</Td>
                 <Td>
                   <div className="flex max-w-[24rem] flex-wrap gap-1">
                     {ch.events.map((e) => (
@@ -144,7 +144,7 @@ function NotificationDialog({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [name, setName] = React.useState("");
-  const [type, setType] = React.useState<"smtp" | "webhook" | "telegram">("smtp");
+  const [type, setType] = React.useState<"smtp" | "webhook" | "telegram" | "feishu" | "dingtalk" | "wecom">("smtp");
   const [enabled, setEnabled] = React.useState(true);
   const [selectedEvents, setSelectedEvents] = React.useState<string[]>(["*"]);
   const [cfg, setCfg] = React.useState<Record<string, string>>({});
@@ -193,8 +193,12 @@ function NotificationDialog({
           };
         } else if (type === "webhook") {
           config = { url: cfg.url ?? "", secret: cfg.secret ?? "" };
-        } else {
+        } else if (type === "telegram") {
           config = { bot_token: cfg.bot_token ?? "", chat_id: cfg.chat_id ?? "" };
+        } else if (type === "wecom") {
+          config = { webhook_url: cfg.webhook_url ?? "" };
+        } else {
+          config = { webhook_url: cfg.webhook_url ?? "", secret: cfg.secret ?? "" };
         }
         await request("/notification-channels", {
           method: "POST",
@@ -231,6 +235,9 @@ function NotificationDialog({
               <option value="smtp">{t("notify.smtp")}</option>
               <option value="webhook">{t("notify.webhook")}</option>
               <option value="telegram">{t("notify.telegram")}</option>
+              <option value="feishu">{t("notify.feishu")}</option>
+              <option value="dingtalk">{t("notify.dingtalk")}</option>
+              <option value="wecom">{t("notify.wecom")}</option>
             </Select>
           </Field>
 
@@ -283,6 +290,29 @@ function NotificationDialog({
               <Field label={t("notify.chatId")}>
                 <Input value={cfg.chat_id ?? ""} onChange={set("chat_id")} />
               </Field>
+            </>
+          )}
+
+          {!editing && (type === "feishu" || type === "dingtalk" || type === "wecom") && (
+            <>
+              <Field label={t("notify.webhookUrl")} hint={t("notify.webhookUrlHint")}>
+                <Input
+                  value={cfg.webhook_url ?? ""}
+                  onChange={set("webhook_url")}
+                  placeholder={
+                    type === "feishu"
+                      ? "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+                      : type === "dingtalk"
+                        ? "https://oapi.dingtalk.com/robot/send?access_token=..."
+                        : "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+                  }
+                />
+              </Field>
+              {type !== "wecom" && (
+                <Field label={t("notify.signSecret")} hint={t("common.optional")}>
+                  <Input type="password" value={cfg.secret ?? ""} onChange={set("secret")} autoComplete="new-password" />
+                </Field>
+              )}
             </>
           )}
 

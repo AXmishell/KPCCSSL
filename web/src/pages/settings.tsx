@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCA, useInfo, useSettings, useUsers } from "@/api/queries";
-import { errorMessage, request } from "@/api/client";
+import { ApiError, errorMessage, request } from "@/api/client";
+import { useAuth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,12 +18,15 @@ export function SettingsPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { setTheme } = useTheme();
+  const { user } = useAuth();
   const { data: settings } = useSettings();
   const { data: info } = useInfo();
   const { data: users } = useUsers();
   const { data: caData } = useCA();
   const [form, setForm] = React.useState<Record<string, string>>({});
   const [busy, setBusy] = React.useState(false);
+  const [testTo, setTestTo] = React.useState("");
+  const [testBusy, setTestBusy] = React.useState(false);
   const [userOpen, setUserOpen] = React.useState(false);
   const [userBusy, setUserBusy] = React.useState(false);
   const [newUser, setNewUser] = React.useState({ email: "", password: "", role: "operator" });
@@ -35,22 +39,38 @@ export function SettingsPage() {
       renewal_notice_days: String(settings.renewal_notice_days ?? 30),
       retention_days: String(settings.retention_days ?? 30),
       theme: String(settings.theme ?? readTheme()),
+      smtp_host: String(settings.smtp_host ?? ""),
+      smtp_port: String(settings.smtp_port ?? 587),
+      smtp_username: String(settings.smtp_username ?? ""),
+      smtp_password: String(settings.smtp_password ?? ""),
+      smtp_from: String(settings.smtp_from ?? ""),
+      smtp_tls: String(settings.smtp_tls ?? "starttls"),
     });
   }, [settings]);
+
+  React.useEffect(() => {
+    if (user?.email) setTestTo((v) => v || user.email);
+  }, [user?.email]);
 
   const save = async () => {
     setBusy(true);
     try {
-      await request("/settings", {
-        method: "PATCH",
-        body: {
-          instance_name: form.instance_name,
-          default_ca_id: form.default_ca_id || null,
-          renewal_notice_days: Number(form.renewal_notice_days || 30),
-          retention_days: Number(form.retention_days || 30),
-          theme: form.theme,
-        },
-      });
+      const body: Record<string, unknown> = {
+        instance_name: form.instance_name,
+        default_ca_id: form.default_ca_id || null,
+        renewal_notice_days: Number(form.renewal_notice_days || 30),
+        retention_days: Number(form.retention_days || 30),
+        theme: form.theme,
+        smtp_host: form.smtp_host,
+        smtp_port: Number(form.smtp_port || 587),
+        smtp_username: form.smtp_username,
+        smtp_from: form.smtp_from,
+        smtp_tls: form.smtp_tls,
+      };
+      if (form.smtp_password && form.smtp_password !== "********") {
+        body.smtp_password = form.smtp_password;
+      }
+      await request("/settings", { method: "PATCH", body });
       setTheme(form.theme as Theme);
       toast.success(t("settings.saved"));
       void qc.invalidateQueries();
@@ -58,6 +78,35 @@ export function SettingsPage() {
       toast.error(errorMessage(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const testMail = async () => {
+    setTestBusy(true);
+    try {
+      await request("/settings/mail-test", { method: "POST", body: { to: testTo || user?.email || "" } });
+      toast.success(t("settings.mailTestSent"));
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "E_MAIL_NOT_CONFIGURED") {
+        toast.error(t("auth.mailNotConfigured"));
+      } else {
+        toast.error(errorMessage(err));
+      }
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  const sendResetEmail = async (id: string) => {
+    try {
+      await request(`/users/${id}/password-reset`, { method: "POST", body: {} });
+      toast.success(t("settings.resetEmailSent"));
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "E_MAIL_NOT_CONFIGURED") {
+        toast.error(t("auth.mailNotConfigured"));
+      } else {
+        toast.error(errorMessage(err));
+      }
     }
   };
 
@@ -173,6 +222,67 @@ export function SettingsPage() {
       </div>
 
       <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>{t("settings.mail")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">{t("settings.mailHint")}</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={t("settings.smtpHost")}>
+              <Input value={form.smtp_host} onChange={(e) => setForm((f) => ({ ...f, smtp_host: e.target.value }))} placeholder="smtp.example.com" />
+            </Field>
+            <Field label={t("settings.smtpPort")}>
+              <Input
+                type="number"
+                min={1}
+                max={65535}
+                value={form.smtp_port}
+                onChange={(e) => setForm((f) => ({ ...f, smtp_port: e.target.value }))}
+              />
+            </Field>
+            <Field label={t("settings.smtpTLS")}>
+              <Select value={form.smtp_tls} onChange={(e) => setForm((f) => ({ ...f, smtp_tls: e.target.value }))}>
+                <option value="starttls">STARTTLS</option>
+                <option value="tls">TLS</option>
+                <option value="none">{t("common.none")}</option>
+              </Select>
+            </Field>
+            <Field label={t("settings.smtpUsername")}>
+              <Input value={form.smtp_username} onChange={(e) => setForm((f) => ({ ...f, smtp_username: e.target.value }))} autoComplete="off" />
+            </Field>
+            <Field label={t("settings.smtpPassword")} hint={t("settings.secretHint")}>
+              <Input
+                type="password"
+                value={form.smtp_password}
+                onChange={(e) => setForm((f) => ({ ...f, smtp_password: e.target.value }))}
+                autoComplete="new-password"
+              />
+            </Field>
+            <Field label={t("settings.smtpFrom")}>
+              <Input value={form.smtp_from} onChange={(e) => setForm((f) => ({ ...f, smtp_from: e.target.value }))} placeholder="no-reply@example.com" />
+            </Field>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <Button onClick={save} disabled={busy}>
+              {t("common.save")}
+            </Button>
+            <div className="flex items-center gap-2">
+              <Input
+                className="w-64"
+                type="email"
+                value={testTo}
+                onChange={(e) => setTestTo(e.target.value)}
+                placeholder={t("settings.testRecipient")}
+              />
+              <Button variant="outline" onClick={testMail} disabled={testBusy || !testTo}>
+                {t("settings.sendTestMail")}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>{t("settings.users")}</CardTitle>
           <Button size="sm" onClick={() => setUserOpen(true)}>{t("settings.addUser")}</Button>
@@ -218,6 +328,9 @@ export function SettingsPage() {
                         onClick={() => void patchUser(u.id, { disabled: !u.disabled })}
                       >
                         {u.disabled ? t("common.enabled") : t("common.disabled")}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => void sendResetEmail(u.id)}>
+                        {t("settings.sendResetEmail")}
                       </Button>
                     </div>
                   </Td>

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -390,6 +392,208 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "user.update", "user", u.ID, "ok", "")
 	writeJSON(w, http.StatusOK, viewUser(u))
+}
+
+type forgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+// forgotPassword sends a reset link without revealing whether the account
+// exists. Delivery failures are logged but the response is identical.
+func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req forgotPasswordRequest
+	if err := decodeJSON(w, r, &req, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if !s.originOK(r) {
+		writeProblem(w, r, http.StatusForbidden, "E_ORIGIN", "cross-origin request refused", nil)
+		return
+	}
+	if ok, wait := s.Svc.Limiter.Allow("forgot:ip:"+clientIP(r), 10, 15*time.Minute); !ok {
+		writeProblem(w, r, http.StatusTooManyRequests, "E_RATE_LIMIT", "too many attempts, retry in "+wait.Round(time.Second).String(), nil)
+		return
+	}
+	emailKey := strings.ToLower(strings.TrimSpace(req.Email))
+	if ok, _ := s.Svc.Limiter.Allow("forgot:email:"+emailKey, 3, 15*time.Minute); !ok {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	err := s.Svc.RequestPasswordReset(r.Context(), req.Email, s.publicBaseURL(r))
+	if errors.Is(err, service.ErrMailNotConfigured) {
+		s.audit(r, "auth.forgot_password", "user", "", "error", "mail not configured")
+		writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		return
+	}
+	if err != nil {
+		slog.Warn("password reset mail failed", "error", err)
+		s.audit(r, "auth.forgot_password", "user", "", "error", "delivery failed")
+	} else {
+		s.audit(r, "auth.forgot_password", "user", "", "ok", "")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type resetPasswordRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var req resetPasswordRequest
+	if err := decodeJSON(w, r, &req, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if !s.originOK(r) {
+		writeProblem(w, r, http.StatusForbidden, "E_ORIGIN", "cross-origin request refused", nil)
+		return
+	}
+	if ok, wait := s.Svc.Limiter.Allow("reset:ip:"+clientIP(r), 20, 15*time.Minute); !ok {
+		writeProblem(w, r, http.StatusTooManyRequests, "E_RATE_LIMIT", "too many attempts, retry in "+wait.Round(time.Second).String(), nil)
+		return
+	}
+	if err := s.Svc.ResetPassword(r.Context(), req.Token, req.Password); err != nil {
+		var invalid *service.InputError
+		switch {
+		case errors.Is(err, service.ErrInvalidToken):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_INVALID_TOKEN", "link is invalid or has expired", nil)
+		case errors.As(err, &invalid):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", invalid.Msg, nil)
+		default:
+			s.fail(w, r, err)
+		}
+		return
+	}
+	s.audit(r, "auth.password_reset", "user", "", "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type confirmEmailRequest struct {
+	Token string `json:"token"`
+}
+
+func (s *Server) confirmEmail(w http.ResponseWriter, r *http.Request) {
+	var req confirmEmailRequest
+	if err := decodeJSON(w, r, &req, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if !s.originOK(r) {
+		writeProblem(w, r, http.StatusForbidden, "E_ORIGIN", "cross-origin request refused", nil)
+		return
+	}
+	if ok, wait := s.Svc.Limiter.Allow("confirm_email:ip:"+clientIP(r), 20, 15*time.Minute); !ok {
+		writeProblem(w, r, http.StatusTooManyRequests, "E_RATE_LIMIT", "too many attempts, retry in "+wait.Round(time.Second).String(), nil)
+		return
+	}
+	u, err := s.Svc.ConfirmEmailChange(r.Context(), req.Token)
+	if err != nil {
+		var conflict *service.ConflictError
+		switch {
+		case errors.Is(err, service.ErrInvalidToken):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_INVALID_TOKEN", "link is invalid or has expired", nil)
+		case errors.As(err, &conflict):
+			writeProblem(w, r, http.StatusConflict, "E_CONFLICT", conflict.Msg, nil)
+		default:
+			s.fail(w, r, err)
+		}
+		return
+	}
+	s.audit(r, "user.email_change", "user", u.ID, "ok", "")
+	writeJSON(w, http.StatusOK, map[string]any{"email": u.Email})
+}
+
+type changeEmailRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func (s *Server) requestEmailChange(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	var req changeEmailRequest
+	if err := decodeJSON(w, r, &req, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if ok, wait := s.Svc.Limiter.Allow("email_change:user:"+p.User.ID, 5, time.Hour); !ok {
+		writeProblem(w, r, http.StatusTooManyRequests, "E_RATE_LIMIT", "too many attempts, retry in "+wait.Round(time.Second).String(), nil)
+		return
+	}
+	if err := s.Svc.RequestEmailChange(r.Context(), p.User.ID, req.Email, req.Password, s.publicBaseURL(r)); err != nil {
+		var invalid *service.InputError
+		var conflict *service.ConflictError
+		var mailErr *service.MailError
+		switch {
+		case errors.Is(err, service.ErrUnauthorized):
+			s.audit(r, "user.email_change_request", "user", p.User.ID, "denied", "wrong password")
+			writeProblem(w, r, http.StatusUnauthorized, "E_UNAUTHENTICATED", "password is incorrect", nil)
+		case errors.Is(err, service.ErrMailNotConfigured):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		case errors.As(err, &invalid):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", invalid.Msg, nil)
+		case errors.As(err, &conflict):
+			writeProblem(w, r, http.StatusConflict, "E_CONFLICT", conflict.Msg, nil)
+		case errors.As(err, &mailErr):
+			s.audit(r, "user.email_change_request", "user", p.User.ID, "error", "delivery failed")
+			writeProblem(w, r, http.StatusBadGateway, "E_MAIL", "could not send verification email", nil)
+		default:
+			s.fail(w, r, err)
+		}
+		return
+	}
+	s.audit(r, "user.email_change_request", "user", p.User.ID, "ok", "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) adminResetPassword(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	userID := chi.URLParam(r, "id")
+	if err := s.Svc.AdminSendPasswordReset(r.Context(), userID, s.publicBaseURL(r)); err != nil {
+		var invalid *service.InputError
+		var mailErr *service.MailError
+		switch {
+		case errors.Is(err, service.ErrMailNotConfigured):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		case errors.As(err, &invalid):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", invalid.Msg, nil)
+		case errors.As(err, &mailErr):
+			s.audit(r, "user.password_reset_email", "user", userID, "error", "delivery failed")
+			writeProblem(w, r, http.StatusBadGateway, "E_MAIL", "could not send reset email", nil)
+		default:
+			s.fail(w, r, err)
+		}
+		return
+	}
+	s.audit(r, "user.password_reset_email", "user", userID, "ok", p.User.ID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type testMailRequest struct {
+	To string `json:"to"`
+}
+
+func (s *Server) testMail(w http.ResponseWriter, r *http.Request) {
+	var req testMailRequest
+	if err := decodeJSON(w, r, &req, 64*1024); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "E_BAD_JSON", "invalid request body", nil)
+		return
+	}
+	if err := s.Svc.TestMail(r.Context(), req.To); err != nil {
+		var mailErr *service.MailError
+		switch {
+		case errors.Is(err, service.ErrMailNotConfigured):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		case errors.As(err, &mailErr):
+			s.audit(r, "settings.mail_test", "settings", "", "error", "delivery failed")
+			writeProblem(w, r, http.StatusBadGateway, "E_MAIL", "could not send test email", nil)
+		default:
+			s.fail(w, r, err)
+		}
+		return
+	}
+	s.audit(r, "settings.mail_test", "settings", "", "ok", "")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func serviceErrUnauthorized() error { return service.ErrUnauthorized }

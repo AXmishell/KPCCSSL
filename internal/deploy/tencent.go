@@ -16,23 +16,35 @@ import (
 	"time"
 )
 
-// TencentConfig deploys to Tencent Cloud CDN or WAF through the SSL service.
+// TencentConfig deploys to Tencent Cloud CDN, WAF, EdgeOne (TEO) or COS
+// through the SSL service. COS additionally needs the bucket name.
 type TencentConfig struct {
 	SecretID  string `json:"secret_id"`
 	SecretKey string `json:"secret_key"`
 	Region    string `json:"region"`
 	Domain    string `json:"domain"`
+	Bucket    string `json:"bucket"`
 }
 
-func (c TencentConfig) validate() error {
+func (c TencentConfig) validateAuth() error {
 	if strings.TrimSpace(c.SecretID) == "" {
 		return errors.New("secret_id is required")
 	}
 	if strings.TrimSpace(c.SecretKey) == "" {
 		return errors.New("secret_key is required")
 	}
+	return nil
+}
+
+func (c TencentConfig) validate(depType string) error {
+	if err := c.validateAuth(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Domain) == "" {
 		return errors.New("domain is required")
+	}
+	if depType == "tencent_cos" && strings.TrimSpace(c.Bucket) == "" {
+		return errors.New("bucket is required")
 	}
 	return nil
 }
@@ -130,22 +142,57 @@ func hmacSHA256(key []byte, data string) []byte {
 }
 
 // TestTencent validates credentials by listing certificates.
-func TestTencent(ctx context.Context, cfg TencentConfig) error {
-	if err := cfg.validate(); err != nil {
+func TestTencent(ctx context.Context, depType string, cfg TencentConfig) error {
+	if err := cfg.validate(depType); err != nil {
 		return err
 	}
 	_, err := tencentRequest(ctx, cfg, "DescribeCertificates", map[string]any{"Limit": 1})
 	return err
 }
 
-// DeployTencent uploads the certificate and deploys it to CDN or WAF domains.
+// tencentResourceType maps a deployment type to the SSL service resource type.
+// Tencent Cloud deploys CDN, WAF and EdgeOne certificates through the same
+// DeployCertificateInstance action and only differs in ResourceType.
+func tencentResourceType(depType string) (string, bool) {
+	switch depType {
+	case "tencent_cdn":
+		return "cdn", true
+	case "tencent_waf":
+		return "waf", true
+	case "tencent_teo":
+		return "teo", true
+	case "tencent_cos":
+		return "cos", true
+	}
+	return "", false
+}
+
+// tencentInstanceIDs builds the instance list. COS uses the
+// "region|bucket|domain" form; every other product accepts the domain list.
+func tencentInstanceIDs(depType string, cfg TencentConfig) ([]string, error) {
+	domains := splitDomains(cfg.Domain)
+	if len(domains) == 0 {
+		return nil, errors.New("domain is required")
+	}
+	if depType != "tencent_cos" {
+		return domains, nil
+	}
+	bucket := strings.TrimSpace(cfg.Bucket)
+	ids := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		ids = append(ids, cfg.region()+"|"+bucket+"|"+domain)
+	}
+	return ids, nil
+}
+
+// DeployTencent uploads the certificate and deploys it to the selected product.
 func DeployTencent(ctx context.Context, depType string, cfg TencentConfig, b *Bundle) error {
-	if err := cfg.validate(); err != nil {
+	if err := cfg.validate(depType); err != nil {
 		return err
 	}
-	resourceType := "cdn"
-	if depType == "tencent_waf" {
-		resourceType = "waf"
+	resourceType, ok := tencentResourceType(depType)
+	if !ok {
+		return fmt.Errorf("unsupported Tencent deployment type %q", depType)
 	}
 	uploaded, err := tencentRequest(ctx, cfg, "UploadCertificate", map[string]any{
 		"CertificatePublicKey":  string(b.CertChain()),
@@ -160,18 +207,13 @@ func DeployTencent(ctx context.Context, depType string, cfg TencentConfig, b *Bu
 		return errors.New("Tencent Cloud did not return CertificateId")
 	}
 
-	domains := make([]string, 0, 4)
-	for _, d := range strings.Split(cfg.Domain, ",") {
-		if d = strings.TrimSpace(d); d != "" {
-			domains = append(domains, d)
-		}
-	}
-	if len(domains) == 0 {
-		return errors.New("domain is required")
+	instances, err := tencentInstanceIDs(depType, cfg)
+	if err != nil {
+		return err
 	}
 	result, err := tencentRequest(ctx, cfg, "DeployCertificateInstance", map[string]any{
 		"CertificateId":  certID,
-		"InstanceIdList": domains,
+		"InstanceIdList": instances,
 		"ResourceType":   resourceType,
 	})
 	if err != nil {

@@ -51,6 +51,10 @@ type Service struct {
 	Limiter  *auth.Limiter
 	DNS      *dnsprovider.Catalog
 
+	// MailSender delivers transactional authentication mail. It defaults to
+	// notify.SendSMTP and is replaceable in tests.
+	MailSender func(ctx context.Context, cfg notify.SMTPConfig, subject, body string) error
+
 	SetupToken string
 
 	caPresetsOnce sync.Once
@@ -65,6 +69,7 @@ func New(cfg *config.Config, st *store.Store, box *secret.Box, engine acme.Engin
 		Cfg: cfg, Store: st, Box: box, Engine: engine, Logs: logs,
 		Runner: runner, Deployer: dep, Notifier: notifier,
 		Limiter: auth.NewLimiter(), DNS: dnsprovider.Load(cfg.ACMEBin),
+		MailSender: notify.SendSMTP,
 	}
 	token := cfg.SetupToken
 	if token == "" {

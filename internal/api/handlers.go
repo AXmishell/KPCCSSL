@@ -709,6 +709,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 var allowedSettings = map[string]bool{
 	"instance_name": true, "default_ca_id": true, "renewal_notice_days": true,
 	"retention_days": true, "theme": true,
+	"smtp_host": true, "smtp_port": true, "smtp_username": true,
+	"smtp_password": true, "smtp_from": true, "smtp_tls": true,
 }
 
 func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
@@ -722,7 +724,19 @@ func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", "unknown setting "+k, nil)
 			return
 		}
-		if err := s.Svc.SetSetting(r.Context(), k, v, false); err != nil {
+		if err := service.ValidMailSetting(k, v); err != nil {
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", err.Error(), nil)
+			return
+		}
+	}
+	for k, v := range body {
+		secret := k == service.SettingSMTPPassword
+		if secret {
+			if pw, _ := v.(string); pw == "" || pw == "********" {
+				continue
+			}
+		}
+		if err := s.Svc.SetSetting(r.Context(), k, v, secret); err != nil {
 			s.fail(w, r, err)
 			return
 		}
