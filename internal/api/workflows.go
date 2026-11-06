@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
@@ -115,12 +116,12 @@ func (s *Server) workflowRunLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := s.Svc.Logs.Path(id)
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(path); err != nil { // #nosec G703 -- path is <log-dir>/<validated-workflow-run-id>.log
 		writeProblem(w, r, http.StatusNotFound, "E_NOT_FOUND", "workflow log not found", nil)
 		return
 	}
 	s.audit(r, "workflow.log.download", "workflow_run", id, "ok", "")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename="+id+".log")
-	http.ServeFile(w, r, path)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", id+".log"))
+	http.ServeFile(w, r, path) // #nosec G703 -- path is <log-dir>/<validated-workflow-run-id>.log
 }
