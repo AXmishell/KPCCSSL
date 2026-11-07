@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/url"
 	"strings"
@@ -36,6 +37,13 @@ type SMTPConfig struct {
 	From     string   `json:"from"`
 	To       []string `json:"to"`
 	TLS      string   `json:"tls"` // tls | starttls | none
+
+	// UseSystemMail makes a notification channel reuse the transactional SMTP
+	// settings and only store channel-specific recipients/overrides.
+	UseSystemMail bool `json:"use_system_mail,omitempty"`
+	// AllowInsecureAuth permits SMTP AUTH over a plaintext connection. It is
+	// only useful for trusted relays that do not offer STARTTLS.
+	AllowInsecureAuth bool `json:"allow_insecure_auth,omitempty"`
 }
 
 // WebhookConfig posts signed JSON.
@@ -82,13 +90,21 @@ type Notifier struct {
 	Store  *store.Store
 	Box    *secret.Box
 	Client *http.Client
+
+	// SystemMail resolves the transactional mail transport. Notification SMTP
+	// channels with use_system_mail=true reuse it.
+	SystemMail func(ctx context.Context) (SMTPConfig, error)
+	// MailSender delivers one SMTP message. It defaults to SendSMTP and is
+	// replaceable in tests.
+	MailSender func(ctx context.Context, cfg SMTPConfig, subject, body string) error
 }
 
 // New builds a notifier with a safe HTTP client.
 func New(st *store.Store, box *secret.Box) *Notifier {
 	return &Notifier{
-		Store: st,
-		Box:   box,
+		Store:      st,
+		Box:        box,
+		MailSender: SendSMTP,
 		Client: &http.Client{
 			Timeout:   20 * time.Second,
 			Transport: deploy.SafeTransport(),
@@ -97,6 +113,31 @@ func New(st *store.Store, box *secret.Box) *Notifier {
 			},
 		},
 	}
+}
+
+// A PermanentError marks a delivery failure that will not succeed on retry,
+// such as an invalid configuration or missing credentials.
+type PermanentError struct{ Err error }
+
+func (e *PermanentError) Error() string { return e.Err.Error() }
+func (e *PermanentError) Unwrap() error { return e.Err }
+
+// Permanent wraps err as non-retryable.
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pe *PermanentError
+	if errors.As(err, &pe) {
+		return err
+	}
+	return &PermanentError{Err: err}
+}
+
+// IsPermanent reports whether err is non-retryable.
+func IsPermanent(err error) bool {
+	var pe *PermanentError
+	return errors.As(err, &pe)
 }
 
 // Dispatch sends an event to every subscribed channel. It returns an aggregate
@@ -122,7 +163,7 @@ func (n *Notifier) Dispatch(ctx context.Context, ev Event) error {
 		for attempts < 3 {
 			attempts++
 			lastErr = n.Send(ctx, &ch, ev.Title, ev.Body)
-			if lastErr == nil {
+			if lastErr == nil || IsPermanent(lastErr) || attempts >= 3 {
 				break
 			}
 			select {
@@ -151,110 +192,224 @@ func (n *Notifier) Dispatch(ctx context.Context, ev Event) error {
 func (n *Notifier) Send(ctx context.Context, ch *store.NotificationChannel, subject, body string) error {
 	plain, err := n.Box.Decrypt(ch.ConfigEnc, "notification_channels:"+ch.ID+":config")
 	if err != nil {
-		return fmt.Errorf("decrypt channel: %w", err)
+		return Permanent(fmt.Errorf("decrypt channel: %w", err))
 	}
 	switch ch.Type {
 	case "smtp":
 		var cfg SMTPConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
+			return Permanent(fmt.Errorf("invalid config: %w", err))
 		}
-		return sendSMTP(ctx, cfg, subject, body)
+		if cfg.UseSystemMail {
+			if n.SystemMail == nil {
+				return Permanent(errors.New("system mail is not configured"))
+			}
+			base, err := n.SystemMail(ctx)
+			if err != nil {
+				return Permanent(err)
+			}
+			if strings.TrimSpace(cfg.From) != "" {
+				base.From = cfg.From
+			}
+			base.To = cfg.To
+			base.UseSystemMail = false
+			base.AllowInsecureAuth = cfg.AllowInsecureAuth
+			cfg = base
+		}
+		if err := ValidateSMTPConfig(&cfg, true, true); err != nil {
+			return Permanent(err)
+		}
+		sender := n.MailSender
+		if sender == nil {
+			sender = SendSMTP
+		}
+		return sender(ctx, cfg, subject, body)
 	case "webhook":
 		var cfg WebhookConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
+			return Permanent(fmt.Errorf("invalid config: %w", err))
 		}
 		return n.sendWebhook(ctx, cfg, ch, subject, body)
 	case "telegram":
 		var cfg TelegramConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
+			return Permanent(fmt.Errorf("invalid config: %w", err))
+		}
+		if cfg.BotToken == "" || cfg.ChatID == "" {
+			return Permanent(errors.New("bot_token and chat_id are required"))
 		}
 		return n.sendTelegram(ctx, cfg, subject, body)
 	case "feishu":
 		var cfg FeishuConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
+			return Permanent(fmt.Errorf("invalid config: %w", err))
 		}
 		return n.sendFeishu(ctx, cfg, subject, body)
 	case "dingtalk":
 		var cfg DingTalkConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
+			return Permanent(fmt.Errorf("invalid config: %w", err))
 		}
 		return n.sendDingTalk(ctx, cfg, subject, body)
 	case "wecom":
 		var cfg WeComConfig
 		if err := json.Unmarshal(plain, &cfg); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
+			return Permanent(fmt.Errorf("invalid config: %w", err))
 		}
 		return n.sendWeCom(ctx, cfg, subject, body)
 	}
-	return fmt.Errorf("unsupported channel type %q", ch.Type)
+	return Permanent(fmt.Errorf("unsupported channel type %q", ch.Type))
+}
+
+// NormalizeConfig validates a channel config and returns the canonical JSON
+// that should be persisted. Defaults are written back so validation-time and
+// send-time behaviour cannot diverge.
+func (n *Notifier) NormalizeConfig(chType string, configJSON []byte) ([]byte, error) {
+	switch chType {
+	case "smtp":
+		var cfg SMTPConfig
+		if err := json.Unmarshal(configJSON, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		if cfg.UseSystemMail {
+			// Transport credentials live in the settings table. Only the
+			// recipients and an optional From override belong to the channel.
+			cfg.Host, cfg.Username, cfg.Password = "", "", ""
+			cfg.Port, cfg.TLS = 0, ""
+			if err := normalizeSMTPConfig(&cfg); err != nil {
+				return nil, err
+			}
+			if len(cfg.To) == 0 {
+				return nil, errors.New("to is required")
+			}
+		} else if err := ValidateSMTPConfig(&cfg, true, true); err != nil {
+			return nil, err
+		}
+		return json.Marshal(cfg)
+	case "webhook":
+		var cfg WebhookConfig
+		if err := json.Unmarshal(configJSON, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		if err := deploy.ValidateWebhookURL(cfg.URL); err != nil {
+			return nil, err
+		}
+		return json.Marshal(cfg)
+	case "telegram":
+		var cfg TelegramConfig
+		if err := json.Unmarshal(configJSON, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		if cfg.BotToken == "" || cfg.ChatID == "" {
+			return nil, errors.New("bot_token and chat_id are required")
+		}
+		return json.Marshal(cfg)
+	case "feishu":
+		var cfg FeishuConfig
+		if err := json.Unmarshal(configJSON, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		if err := validateBotURL(cfg.WebhookURL, "open.feishu.cn", "open.larksuite.com"); err != nil {
+			return nil, err
+		}
+		return json.Marshal(cfg)
+	case "dingtalk":
+		var cfg DingTalkConfig
+		if err := json.Unmarshal(configJSON, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		if err := validateBotURL(cfg.WebhookURL, "oapi.dingtalk.com"); err != nil {
+			return nil, err
+		}
+		return json.Marshal(cfg)
+	case "wecom":
+		var cfg WeComConfig
+		if err := json.Unmarshal(configJSON, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		if err := validateBotURL(cfg.WebhookURL, "qyapi.weixin.qq.com"); err != nil {
+			return nil, err
+		}
+		return json.Marshal(cfg)
+	}
+	return nil, errors.New("unsupported channel type")
 }
 
 // Validate checks a channel config before storing it.
 func (n *Notifier) Validate(chType, configJSON string) error {
-	switch chType {
-	case "smtp":
-		var cfg SMTPConfig
-		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-			return fmt.Errorf("invalid JSON: %w", err)
-		}
-		if cfg.Host == "" || cfg.From == "" || len(cfg.To) == 0 {
-			return errors.New("host, from and to are required")
-		}
-		if cfg.Port == 0 {
-			cfg.Port = 587
-		}
-		if cfg.TLS == "" {
-			cfg.TLS = "starttls"
-		}
-		if cfg.TLS != "tls" && cfg.TLS != "starttls" && cfg.TLS != "none" {
-			return errors.New("tls must be tls, starttls or none")
-		}
-		return nil
-	case "webhook":
-		var cfg WebhookConfig
-		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-			return fmt.Errorf("invalid JSON: %w", err)
-		}
-		return deploy.ValidateWebhookURL(cfg.URL)
-	case "telegram":
-		var cfg TelegramConfig
-		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-			return fmt.Errorf("invalid JSON: %w", err)
-		}
-		if cfg.BotToken == "" || cfg.ChatID == "" {
-			return errors.New("bot_token and chat_id are required")
-		}
-		return nil
-	case "feishu":
-		var cfg FeishuConfig
-		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-			return fmt.Errorf("invalid JSON: %w", err)
-		}
-		return validateBotURL(cfg.WebhookURL, "open.feishu.cn", "open.larksuite.com")
-	case "dingtalk":
-		var cfg DingTalkConfig
-		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-			return fmt.Errorf("invalid JSON: %w", err)
-		}
-		return validateBotURL(cfg.WebhookURL, "oapi.dingtalk.com")
-	case "wecom":
-		var cfg WeComConfig
-		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-			return fmt.Errorf("invalid JSON: %w", err)
-		}
-		return validateBotURL(cfg.WebhookURL, "qyapi.weixin.qq.com")
+	_, err := n.NormalizeConfig(chType, []byte(configJSON))
+	return err
+}
+
+// NormalizeSMTPConfig trims fields and applies transport defaults.
+func NormalizeSMTPConfig(cfg *SMTPConfig) error {
+	return normalizeSMTPConfig(cfg)
+}
+
+// ValidateSMTPConfig normalizes and validates a mail transport configuration.
+func ValidateSMTPConfig(cfg *SMTPConfig, requireFrom, requireTo bool) error {
+	if err := normalizeSMTPConfig(cfg); err != nil {
+		return err
 	}
-	return errors.New("unsupported channel type")
+	if cfg.Host == "" {
+		return errors.New("SMTP host is required")
+	}
+	if requireFrom && cfg.From == "" {
+		return errors.New("sender address is required")
+	}
+	if requireTo && len(cfg.To) == 0 {
+		return errors.New("at least one recipient is required")
+	}
+	return nil
+}
+
+func normalizeSMTPConfig(cfg *SMTPConfig) error {
+	cfg.Host = strings.TrimSpace(cfg.Host)
+	cfg.Username = strings.TrimSpace(cfg.Username)
+	cfg.From = strings.TrimSpace(cfg.From)
+	cfg.TLS = strings.ToLower(strings.TrimSpace(cfg.TLS))
+
+	if cfg.Port == 0 {
+		cfg.Port = 587
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return errors.New("SMTP port must be between 1 and 65535")
+	}
+	if cfg.TLS == "" {
+		cfg.TLS = "starttls"
+	}
+	switch cfg.TLS {
+	case "tls", "starttls", "none":
+	default:
+		return errors.New("SMTP TLS mode must be tls, starttls or none")
+	}
+	if cfg.From != "" {
+		from, err := mail.ParseAddress(cfg.From)
+		if err != nil || strings.ContainsAny(from.Address, "\r\n") {
+			return errors.New("invalid sender address")
+		}
+		cfg.From = from.Address
+	}
+	for i, to := range cfg.To {
+		to = strings.TrimSpace(to)
+		if to == "" {
+			return errors.New("recipient address is required")
+		}
+		addr, err := mail.ParseAddress(to)
+		if err != nil || strings.ContainsAny(addr.Address, "\r\n") {
+			return fmt.Errorf("invalid recipient address")
+		}
+		cfg.To[i] = addr.Address
+	}
+	if cfg.Username != "" && cfg.TLS == "none" && !cfg.AllowInsecureAuth {
+		return errors.New("SMTP authentication requires TLS; set allow_insecure_auth to override")
+	}
+	return nil
 }
 
 func (n *Notifier) sendWebhook(ctx context.Context, cfg WebhookConfig, ch *store.NotificationChannel, subject, body string) error {
 	if err := deploy.ValidateWebhookURL(cfg.URL); err != nil {
-		return err
+		return Permanent(err)
 	}
 	payload, _ := json.Marshal(map[string]string{"channel": ch.Name, "subject": subject, "body": body})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(payload))
@@ -362,7 +517,7 @@ func botResponseError(data []byte) error {
 
 func (n *Notifier) sendFeishu(ctx context.Context, cfg FeishuConfig, subject, body string) error {
 	if err := validateBotURL(cfg.WebhookURL, "open.feishu.cn", "open.larksuite.com"); err != nil {
-		return err
+		return Permanent(err)
 	}
 	payload := map[string]any{
 		"msg_type": "text",
@@ -382,7 +537,7 @@ func (n *Notifier) sendFeishu(ctx context.Context, cfg FeishuConfig, subject, bo
 
 func (n *Notifier) sendDingTalk(ctx context.Context, cfg DingTalkConfig, subject, body string) error {
 	if err := validateBotURL(cfg.WebhookURL, "oapi.dingtalk.com"); err != nil {
-		return err
+		return Permanent(err)
 	}
 	target, err := url.Parse(cfg.WebhookURL)
 	if err != nil {
@@ -407,7 +562,7 @@ func (n *Notifier) sendDingTalk(ctx context.Context, cfg DingTalkConfig, subject
 
 func (n *Notifier) sendWeCom(ctx context.Context, cfg WeComConfig, subject, body string) error {
 	if err := validateBotURL(cfg.WebhookURL, "qyapi.weixin.qq.com"); err != nil {
-		return err
+		return Permanent(err)
 	}
 	data, err := json.Marshal(map[string]any{
 		"msgtype": "text",
@@ -463,6 +618,13 @@ func SendSMTP(ctx context.Context, cfg SMTPConfig, subject, body string) error {
 func sendSMTP(ctx context.Context, cfg SMTPConfig, subject, body string) error {
 	if cfg.Port == 0 {
 		cfg.Port = 587
+	}
+	if cfg.TLS == "" {
+		// Defense in depth: a missing mode must never fall back to plaintext.
+		cfg.TLS = "starttls"
+	}
+	if cfg.TLS == "none" && cfg.Username != "" && !cfg.AllowInsecureAuth {
+		return errors.New("SMTP authentication requires TLS")
 	}
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprint(cfg.Port))
 	d := &net.Dialer{Timeout: 15 * time.Second}

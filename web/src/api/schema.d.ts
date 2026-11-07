@@ -784,7 +784,7 @@ export interface paths {
         };
         get: operations["listNotificationChannels"];
         put?: never;
-        post?: never;
+        post: operations["createNotificationChannel"];
         delete?: never;
         options?: never;
         head?: never;
@@ -806,6 +806,7 @@ export interface paths {
         delete: operations["deleteNotificationChannel"];
         options?: never;
         head?: never;
+        /** @description Partial update. Omitted config fields keep their stored values; the channel type cannot be changed. */
         patch: operations["updateNotificationChannel"];
         trace?: never;
     };
@@ -1089,6 +1090,7 @@ export interface components {
             dns_credential_id?: string | null;
             webroot?: string | null;
             auto_renew?: boolean;
+            auto_deploy?: boolean;
             /** @enum {string} */
             status?: "draft" | "queued" | "issuing" | "active" | "renewing" | "failed" | "revoked" | "disabled";
             current_revision_id?: string | null;
@@ -1116,6 +1118,7 @@ export interface components {
                 must_staple?: boolean;
             };
             auto_renew?: boolean;
+            auto_deploy?: boolean;
             version?: number;
         };
         CertificateEvent: {
@@ -1241,6 +1244,39 @@ export interface components {
             type?: "smtp" | "webhook" | "telegram" | "feishu" | "dingtalk" | "wecom";
             events?: string[];
             enabled?: boolean;
+            /** @description Non-secret channel settings, safe to show in the UI. */
+            public_config?: {
+                [key: string]: unknown;
+            };
+            /** @description Names of configured fields; secret values are never returned. */
+            configured_fields?: string[];
+            /** @enum {string} */
+            last_delivery_status?: "pending" | "sent" | "failed";
+            last_delivery_at?: number;
+            last_delivery_error?: string;
+        };
+        /**
+         * @description SMTP channel config. With use_system_mail=true only to/from are stored;
+         *     host, port, tls, username and password are resolved from the settings
+         *     table at send time. Independent channels must provide host, from and to.
+         */
+        NotificationSMTPConfig: {
+            use_system_mail?: boolean;
+            host?: string;
+            /** @default 587 */
+            port: number;
+            /**
+             * @default starttls
+             * @enum {string}
+             */
+            tls: "tls" | "starttls" | "none";
+            username?: string;
+            password?: string;
+            /** Format: email */
+            from?: string;
+            to?: string[];
+            /** @description Allow AUTH over a plaintext connection. Only for trusted relays. */
+            allow_insecure_auth?: boolean;
         };
         WorkflowStep: {
             id: string;
@@ -2845,6 +2881,41 @@ export interface operations {
             };
         };
     };
+    createNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /** @enum {string} */
+                    type: "smtp" | "webhook" | "telegram" | "feishu" | "dingtalk" | "wecom";
+                    /** @description Channel-specific settings. SMTP fields follow NotificationSMTPConfig. */
+                    config: {
+                        [key: string]: unknown;
+                    };
+                    events: string[];
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
     deleteNotificationChannel: {
         parameters: {
             query?: never;
@@ -2879,6 +2950,7 @@ export interface operations {
                 "application/json": {
                     name?: string;
                     type?: string;
+                    /** @description Partial channel config. Omitted fields keep their stored values. */
                     config?: {
                         [key: string]: unknown;
                     };

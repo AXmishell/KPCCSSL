@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Send, Trash2 } from "lucide-react";
 import { useAuth } from "@/auth";
-import { qk, useNotifications } from "@/api/queries";
+import { qk, useNotifications, useSettings } from "@/api/queries";
 import { errorMessage, request } from "@/api/client";
 import type { NotificationChannel } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,8 @@ export function NotificationsPage() {
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<NotificationChannel | null>(null);
   const isAdmin = user?.role === "admin";
+  const { data: settings } = useSettings(isAdmin);
+  const systemMailConfigured = settings?.mail_configured === true;
 
   const test = async (id: string) => {
     try {
@@ -78,7 +80,19 @@ export function NotificationsPage() {
                   </div>
                 </Td>
                 <Td>
-                  <Badge variant={ch.enabled ? "success" : "muted"}>{ch.enabled ? t("common.enabled") : t("common.disabled")}</Badge>
+                  <div className="flex flex-col gap-1">
+                    <Badge variant={ch.enabled ? "success" : "muted"}>{ch.enabled ? t("common.enabled") : t("common.disabled")}</Badge>
+                    {ch.last_delivery_status && (
+                      <span className={`text-[10px] ${ch.last_delivery_status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                        {t("notify.lastDelivery", { status: ch.last_delivery_status })}
+                      </span>
+                    )}
+                    {ch.last_delivery_error && (
+                      <span className="max-w-[16rem] truncate text-[10px] text-destructive" title={ch.last_delivery_error}>
+                        {ch.last_delivery_error}
+                      </span>
+                    )}
+                  </div>
                 </Td>
                 <Td className="text-right">
                   {isAdmin && (
@@ -125,6 +139,7 @@ export function NotificationsPage() {
         onOpenChange={setOpen}
         editing={editing}
         events={data?.events ?? []}
+        systemMailConfigured={systemMailConfigured}
       />
     </div>
   );
@@ -135,11 +150,13 @@ function NotificationDialog({
   onOpenChange,
   editing,
   events,
+  systemMailConfigured,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   editing: NotificationChannel | null;
   events: string[];
+  systemMailConfigured: boolean;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -148,16 +165,25 @@ function NotificationDialog({
   const [enabled, setEnabled] = React.useState(true);
   const [selectedEvents, setSelectedEvents] = React.useState<string[]>(["*"]);
   const [cfg, setCfg] = React.useState<Record<string, string>>({});
+  const [useSystemMail, setUseSystemMail] = React.useState(true);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
+    const pub = editing?.public_config ?? {};
+    const initial: Record<string, string> = {};
+    for (const [k, v] of Object.entries(pub)) {
+      initial[k] = Array.isArray(v) ? v.join(", ") : String(v ?? "");
+    }
     setName(editing?.name ?? "");
     setType(editing?.type ?? "smtp");
     setEnabled(editing?.enabled ?? true);
     setSelectedEvents(editing?.events ?? ["*"]);
-    setCfg({});
+    setCfg(initial);
+    setUseSystemMail(
+      editing ? (editing.type === "smtp" ? Boolean(pub.use_system_mail) || !String(pub.host ?? "") : false) : true,
+    );
     setError("");
   }, [open, editing]);
 
@@ -169,37 +195,57 @@ function NotificationDialog({
     });
   };
 
+  const configured = (field: string) => Boolean(editing?.configured_fields?.includes(field));
+
+  const buildConfig = (): Record<string, unknown> => {
+    if (type === "smtp") {
+      const config: Record<string, unknown> = {
+        use_system_mail: useSystemMail,
+        to: (cfg.to ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+      if ((cfg.from ?? "").trim()) config.from = cfg.from.trim();
+      if (!useSystemMail) {
+        config.host = cfg.host ?? "";
+        config.port = Number(cfg.port || 587);
+        config.tls = cfg.tls ?? "starttls";
+        config.username = cfg.username ?? "";
+        if (cfg.password) config.password = cfg.password;
+      }
+      return config;
+    }
+    if (type === "webhook") {
+      const config: Record<string, unknown> = { url: cfg.url ?? "" };
+      if (cfg.secret) config.secret = cfg.secret;
+      return config;
+    }
+    if (type === "telegram") {
+      const config: Record<string, unknown> = { chat_id: cfg.chat_id ?? "" };
+      if (cfg.bot_token) config.bot_token = cfg.bot_token;
+      return config;
+    }
+    if (type === "wecom") {
+      return { webhook_url: cfg.webhook_url ?? "" };
+    }
+    const config: Record<string, unknown> = { webhook_url: cfg.webhook_url ?? "" };
+    if (cfg.secret) config.secret = cfg.secret;
+    return config;
+  };
+
   const submit = async () => {
     setBusy(true);
     setError("");
     try {
+      const config = buildConfig();
       if (editing) {
         await request(`/notification-channels/${editing.id}`, {
           method: "PATCH",
-          body: { name, type, events: selectedEvents, enabled },
+          body: { name, type, config, events: selectedEvents, enabled },
         });
         toast.success(t("notify.updated"));
       } else {
-        let config: Record<string, unknown> = {};
-        if (type === "smtp") {
-          config = {
-            host: cfg.host ?? "",
-            port: Number(cfg.port || 587),
-            username: cfg.username ?? "",
-            password: cfg.password ?? "",
-            from: cfg.from ?? "",
-            to: (cfg.to ?? "").split(",").map((s) => s.trim()).filter(Boolean),
-            tls: cfg.tls ?? "starttls",
-          };
-        } else if (type === "webhook") {
-          config = { url: cfg.url ?? "", secret: cfg.secret ?? "" };
-        } else if (type === "telegram") {
-          config = { bot_token: cfg.bot_token ?? "", chat_id: cfg.chat_id ?? "" };
-        } else if (type === "wecom") {
-          config = { webhook_url: cfg.webhook_url ?? "" };
-        } else {
-          config = { webhook_url: cfg.webhook_url ?? "", secret: cfg.secret ?? "" };
-        }
         await request("/notification-channels", {
           method: "POST",
           body: { name, type, config, events: selectedEvents, enabled },
@@ -217,6 +263,13 @@ function NotificationDialog({
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setCfg((c) => ({ ...c, [k]: e.target.value }));
+
+  const changeSystemMail = (next: boolean) => {
+    if (next === useSystemMail) return;
+    const message = next ? t("notify.switchSystemConfirm") : t("notify.switchIndependentConfirm");
+    if (!window.confirm(message)) return;
+    setUseSystemMail(next);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -241,51 +294,88 @@ function NotificationDialog({
             </Select>
           </Field>
 
-          {!editing && type === "smtp" && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label={t("notify.host")} className="sm:col-span-2">
-                <Input value={cfg.host ?? ""} onChange={set("host")} placeholder="smtp.example.com" />
-              </Field>
-              <Field label={t("notify.port")}>
-                <Input type="number" value={cfg.port ?? "587"} onChange={set("port")} />
-              </Field>
-              <Field label={t("notify.tls")}>
-                <Select value={cfg.tls ?? "starttls"} onChange={set("tls")}>
-                  <option value="starttls">starttls</option>
-                  <option value="tls">tls</option>
-                  <option value="none">none</option>
-                </Select>
-              </Field>
-              <Field label={t("notify.username")}>
-                <Input value={cfg.username ?? ""} onChange={set("username")} autoComplete="off" />
-              </Field>
-              <Field label={t("auth.password")}>
-                <Input type="password" value={cfg.password ?? ""} onChange={set("password")} autoComplete="new-password" />
-              </Field>
-              <Field label={t("notify.from")}>
-                <Input value={cfg.from ?? ""} onChange={set("from")} placeholder="kpccssl@example.com" />
-              </Field>
-              <Field label={t("notify.to")}>
-                <Input value={cfg.to ?? ""} onChange={set("to")} placeholder="ops@example.com" />
-              </Field>
-            </div>
+          {type === "smtp" && (
+            <>
+              <label className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
+                <span>
+                  <span className="text-sm">{t("notify.useSystemMail")}</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">{t("notify.useSystemMailHint")}</span>
+                </span>
+                <Switch checked={useSystemMail} onCheckedChange={changeSystemMail} aria-label={t("notify.useSystemMail")} />
+              </label>
+              {useSystemMail && !systemMailConfigured && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">{t("notify.systemMailNotConfigured")}</p>
+              )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {!useSystemMail && (
+                  <>
+                    <Field label={t("notify.host")} className="sm:col-span-2">
+                      <Input value={cfg.host ?? ""} onChange={set("host")} placeholder="smtp.example.com" />
+                    </Field>
+                    <Field label={t("notify.port")}>
+                      <Input type="number" value={cfg.port ?? "587"} onChange={set("port")} />
+                    </Field>
+                    <Field label={t("notify.tls")}>
+                      <Select value={cfg.tls ?? "starttls"} onChange={set("tls")}>
+                        <option value="starttls">starttls</option>
+                        <option value="tls">tls</option>
+                        <option value="none">none</option>
+                      </Select>
+                    </Field>
+                    <Field label={t("notify.username")}>
+                      <Input value={cfg.username ?? ""} onChange={set("username")} autoComplete="off" />
+                    </Field>
+                    <Field label={t("auth.password")} hint={configured("password") ? t("notify.keepSecret") : undefined}>
+                      <Input
+                        type="password"
+                        value={cfg.password ?? ""}
+                        onChange={set("password")}
+                        placeholder={configured("password") ? "••••••••" : ""}
+                        autoComplete="new-password"
+                      />
+                    </Field>
+                  </>
+                )}
+                <Field label={t("notify.from")} hint={useSystemMail ? t("notify.fromOptionalHint") : undefined}>
+                  <Input value={cfg.from ?? ""} onChange={set("from")} placeholder="kpccssl@example.com" />
+                </Field>
+                <Field label={t("notify.to")}>
+                  <Input value={cfg.to ?? ""} onChange={set("to")} placeholder="ops@example.com" />
+                </Field>
+              </div>
+              {!useSystemMail && (cfg.tls ?? "starttls") === "none" && (cfg.username ?? "") !== "" && (
+                <p className="text-xs text-destructive">{t("notify.insecureAuthHint")}</p>
+              )}
+            </>
           )}
 
-          {!editing && type === "webhook" && (
+          {type === "webhook" && (
             <>
               <Field label={t("deploy.url")}>
                 <Input value={cfg.url ?? ""} onChange={set("url")} placeholder="https://example.com/hook" />
               </Field>
-              <Field label={t("deploy.secret")} hint={t("common.optional")}>
-                <Input value={cfg.secret ?? ""} onChange={set("secret")} />
+              <Field label={t("deploy.secret")} hint={configured("secret") ? t("notify.keepSecret") : t("common.optional")}>
+                <Input
+                  type="password"
+                  value={cfg.secret ?? ""}
+                  onChange={set("secret")}
+                  placeholder={configured("secret") ? "••••••••" : ""}
+                  autoComplete="new-password"
+                />
               </Field>
             </>
           )}
 
-          {!editing && type === "telegram" && (
+          {type === "telegram" && (
             <>
-              <Field label={t("notify.botToken")}>
-                <Input type="password" value={cfg.bot_token ?? ""} onChange={set("bot_token")} autoComplete="new-password" />
+              <Field label={t("notify.botToken")} hint={configured("bot_token") ? t("notify.keepSecret") : undefined}>
+                <Input
+                  type="password"
+                  value={cfg.bot_token ?? ""}
+                  onChange={set("bot_token")}
+                  placeholder={configured("bot_token") ? "••••••••" : ""}
+                  autoComplete="new-password"
+                />
               </Field>
               <Field label={t("notify.chatId")}>
                 <Input value={cfg.chat_id ?? ""} onChange={set("chat_id")} />
@@ -293,7 +383,7 @@ function NotificationDialog({
             </>
           )}
 
-          {!editing && (type === "feishu" || type === "dingtalk" || type === "wecom") && (
+          {(type === "feishu" || type === "dingtalk" || type === "wecom") && (
             <>
               <Field label={t("notify.webhookUrl")} hint={t("notify.webhookUrlHint")}>
                 <Input
@@ -309,8 +399,14 @@ function NotificationDialog({
                 />
               </Field>
               {type !== "wecom" && (
-                <Field label={t("notify.signSecret")} hint={t("common.optional")}>
-                  <Input type="password" value={cfg.secret ?? ""} onChange={set("secret")} autoComplete="new-password" />
+                <Field label={t("notify.signSecret")} hint={configured("secret") ? t("notify.keepSecret") : t("common.optional")}>
+                  <Input
+                    type="password"
+                    value={cfg.secret ?? ""}
+                    onChange={set("secret")}
+                    placeholder={configured("secret") ? "••••••••" : ""}
+                    autoComplete="new-password"
+                  />
                 </Field>
               )}
             </>

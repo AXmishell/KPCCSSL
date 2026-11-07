@@ -123,14 +123,23 @@ func (r *WorkflowRunner) executeDeploy(ctx context.Context, run *store.WorkflowR
 			}
 		}
 	}
-	key := "workflow:" + run.ID + ":" + step.ID
-	var jobs []*store.Job
-	var err error
-	if revisionID != "" {
-		jobs, err = r.Service.DeployRevisionNow(ctx, certID, revisionID, key)
-	} else {
-		jobs, err = r.Service.DeployNow(ctx, certID, key)
+	// Fall back to the certificate's current revision so every workflow deploy
+	// has an explicit revision and shares the automatic deploy's key.
+	if revisionID == "" {
+		c, err := r.Store.GetCertificate(ctx, certID)
+		if err != nil {
+			return false, err
+		}
+		if c.CurrentRevisionID == nil {
+			return false, errors.New("certificate has no issued revision")
+		}
+		revisionID = *c.CurrentRevisionID
 	}
+	// Reuse the revision/target idempotency keys used by auto-deploy after
+	// issue/renew. An apply→deploy pipeline therefore reuses those jobs instead
+	// of deploying the same revision twice.
+	key := "auto-deploy:" + revisionID
+	jobs, err := r.Service.DeployRevisionTargets(ctx, certID, revisionID, cfg.DeploymentIDs, key)
 	if err != nil {
 		return false, err
 	}
@@ -140,9 +149,9 @@ func (r *WorkflowRunner) executeDeploy(ctx context.Context, run *store.WorkflowR
 	}
 	fmt.Fprintf(logw, "queued %d deploy job(s) for %s\n", len(ids), certID)
 	_ = r.Store.SetStepJobs(ctx, st.ID, mustJSON(ids))
-	out := map[string]any{"certificate_id": certID}
-	if revisionID != "" {
-		out["revision_id"] = revisionID
+	out := map[string]any{"certificate_id": certID, "revision_id": revisionID}
+	if len(cfg.DeploymentIDs) > 0 {
+		out["deployment_ids"] = cfg.DeploymentIDs
 	}
 	_ = r.Store.SetStepOutput(ctx, st.ID, mustJSON(out))
 	return r.cancelIfInactive(ctx, run.ID, st, ids)

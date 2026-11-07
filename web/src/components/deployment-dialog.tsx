@@ -219,7 +219,7 @@ export function DeploymentDialog({
         <DialogHeader>
           <DialogTitle>{t("deploy.add")}</DialogTitle>
         </DialogHeader>
-        <div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+        <div className="-m-1 max-h-[70vh] space-y-4 overflow-y-auto p-1">
           {error && <ErrorBox message={error} />}
           <Field label={t("common.name")}>
             <Input

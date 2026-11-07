@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 const PASSWORD = "correct-horse-battery-staple";
 
 test("setup, issue a certificate and download it", async ({ page }) => {
-  await page.goto("/setup");
+  await page.goto("/install");
   await page.getByLabel("Setup Token").fill("e2e-token");
   await page.getByLabel("邮箱").fill("admin@example.com");
   await page.getByLabel("密码", { exact: true }).fill(PASSWORD);

@@ -425,6 +425,11 @@ func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
 		return
 	}
+	if errors.Is(err, service.ErrMailCredentialsUnavailable) {
+		s.audit(r, "auth.forgot_password", "user", "", "error", "mail credentials unavailable")
+		writeProblem(w, r, http.StatusInternalServerError, "E_MAIL_CREDENTIALS", "email credentials are unavailable", nil)
+		return
+	}
 	if err != nil {
 		slog.Warn("password reset mail failed", "error", err)
 		s.audit(r, "auth.forgot_password", "user", "", "error", "delivery failed")
@@ -530,6 +535,8 @@ func (s *Server) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusUnauthorized, "E_UNAUTHENTICATED", "password is incorrect", nil)
 		case errors.Is(err, service.ErrMailNotConfigured):
 			writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		case errors.Is(err, service.ErrMailCredentialsUnavailable):
+			writeProblem(w, r, http.StatusInternalServerError, "E_MAIL_CREDENTIALS", "email credentials are unavailable", nil)
 		case errors.As(err, &invalid):
 			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", invalid.Msg, nil)
 		case errors.As(err, &conflict):
@@ -555,6 +562,8 @@ func (s *Server) adminResetPassword(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, service.ErrMailNotConfigured):
 			writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		case errors.Is(err, service.ErrMailCredentialsUnavailable):
+			writeProblem(w, r, http.StatusInternalServerError, "E_MAIL_CREDENTIALS", "email credentials are unavailable", nil)
 		case errors.As(err, &invalid):
 			writeProblem(w, r, http.StatusUnprocessableEntity, "E_VALIDATION", invalid.Msg, nil)
 		case errors.As(err, &mailErr):
@@ -584,6 +593,8 @@ func (s *Server) testMail(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, service.ErrMailNotConfigured):
 			writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		case errors.Is(err, service.ErrMailCredentialsUnavailable):
+			writeProblem(w, r, http.StatusInternalServerError, "E_MAIL_CREDENTIALS", "email credentials are unavailable", nil)
 		case errors.As(err, &mailErr):
 			s.audit(r, "settings.mail_test", "settings", "", "error", "delivery failed")
 			writeProblem(w, r, http.StatusBadGateway, "E_MAIL", "could not send test email", nil)

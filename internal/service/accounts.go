@@ -408,7 +408,10 @@ func (s *Service) TestNotification(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return s.Notifier.Send(ctx, ch, "KPCCSSL test notification", "This is a test message sent at "+time.Now().UTC().Format(time.RFC3339)+".")
+	if err := s.Notifier.Send(ctx, ch, "KPCCSSL test notification", "This is a test message sent at "+time.Now().UTC().Format(time.RFC3339)+"."); err != nil {
+		return &NotificationError{Err: err}
+	}
+	return nil
 }
 
 func (s *Service) validateDirectoryURL(raw string) error {

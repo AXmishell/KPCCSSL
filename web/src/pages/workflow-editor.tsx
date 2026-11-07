@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, GitBranch, Maximize, Plus, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { toast } from "sonner";
 import { errorMessage, request } from "@/api/client";
-import { useCA, useCertificates, useDNS } from "@/api/queries";
+import { useCA, useCertificates, useDeployments, useDNS } from "@/api/queries";
 import type { Workflow, WorkflowDefinition, WorkflowStep, WorkflowStepType } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import {
   newNode,
   nodeSummary,
   stepTypes,
+  upstreamCertificateID,
   validateEditForm,
 } from "./workflow-utils";
 
@@ -427,6 +428,10 @@ function GraphEditor({
 
   const selected = nodeByID.get(selectedNode);
   const selectedEdgeObj = form.edges.find((e) => e.id === selectedEdge);
+  const selectedUpstreamCertID = React.useMemo(
+    () => (selected ? upstreamCertificateID(selected.id, form.nodes, form.edges) : undefined),
+    [selected, form.nodes, form.edges],
+  );
 
   return (
     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -621,6 +626,7 @@ function GraphEditor({
             onConfig={(key, value) => updateConfig(selected.id, key, value)}
             onMove={() => {}}
             onDelete={() => removeNode(selected.id)}
+            upstreamCertID={selectedUpstreamCertID}
           />
         ) : selectedEdgeObj ? (
           <Card>
@@ -663,6 +669,7 @@ function StepEditor({
   onConfig,
   onMove,
   onDelete,
+  upstreamCertID,
 }: {
   step: WorkflowStep;
   index: number;
@@ -675,11 +682,50 @@ function StepEditor({
   onConfig: (key: string, value: unknown) => void;
   onMove: (dir: -1 | 1) => void;
   onDelete: () => void;
+  /** Certificate statically inherited from an upstream apply/verify node. */
+  upstreamCertID?: string;
 }) {
   const { t } = useTranslation();
   const cfg = (step.config ?? {}) as Record<string, unknown>;
   const certID = String(cfg.certificate_id ?? "");
   const certKnown = certs.some((c) => c.id === certID);
+  // When inheriting, use the upstream certificate to list its targets. If the
+  // upstream certificate is only known at run time (inline apply), fetch every
+  // target and let the backend validate the selection against that certificate.
+  const targetCertID = certID || upstreamCertID || "";
+  const { data: deployData, isLoading: deployLoading } = useDeployments(
+    step.type === "deploy" ? targetCertID || undefined : undefined,
+    step.type === "deploy",
+  );
+  const deploymentIDs = React.useMemo(
+    () => (Array.isArray(cfg.deployment_ids) ? cfg.deployment_ids.map(String) : []),
+    [cfg.deployment_ids],
+  );
+  const deploymentTargets = (deployData?.items ?? []).filter(
+    (d) => d.enabled && (!targetCertID || d.certificate_id === targetCertID),
+  );
+  const toggleDeployment = (id: string, checked: boolean) => {
+    onConfig(
+      "deployment_ids",
+      checked ? [...deploymentIDs, id] : deploymentIDs.filter((target) => target !== id),
+    );
+  };
+  const certificateLabel = (id: string) => {
+    const cert = certs.find((c) => c.id === id);
+    return cert ? `${cert.name} (${cert.primary_domain})` : id;
+  };
+  const renderTarget = (target: typeof deploymentTargets[number]) => (
+    <label key={target.id} className="flex items-center gap-2 rounded px-1 py-1 text-sm hover:bg-accent">
+      <input
+        type="checkbox"
+        className="h-3.5 w-3.5 accent-primary"
+        checked={deploymentIDs.includes(target.id)}
+        onChange={(e) => toggleDeployment(target.id, e.target.checked)}
+      />
+      <span className="flex-1 truncate">{target.name}</span>
+      <Badge variant="muted">{target.type}</Badge>
+    </label>
+  );
   return (
     <Card>
       <CardContent className="space-y-3 p-4">
@@ -725,7 +771,7 @@ function StepEditor({
         </div>
 
         {step.type === "apply" && (
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className={`grid gap-3 ${graphMode ? "grid-cols-1" : "sm:grid-cols-3"}`}>
             <Field label={t("workflow.certificate")} hint={t("workflow.inlineHint")}>
               <Select value={certID} onChange={(e) => onConfig("certificate_id", e.target.value)}>
                 <option value="">{t("workflow.inlineCertificate")}</option>
@@ -786,9 +832,15 @@ function StepEditor({
         )}
 
         {step.type === "deploy" && (
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className={`grid gap-3 ${graphMode ? "grid-cols-1" : "sm:grid-cols-2"}`}>
             <Field label={t("workflow.certificate")} hint={t("workflow.inheritHint")}>
-              <Select value={certID} onChange={(e) => onConfig("certificate_id", e.target.value)}>
+              <Select
+                value={certID}
+                onChange={(e) => {
+                  onConfig("certificate_id", e.target.value);
+                  onConfig("deployment_ids", []);
+                }}
+              >
                 <option value="">{t("workflow.inherit")}</option>
                 {certID && !certKnown && <option value={certID}>{certID}</option>}
                 {certs.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.primary_domain})</option>)}
@@ -796,6 +848,42 @@ function StepEditor({
             </Field>
             <Field label={t("workflow.revision")} hint={t("workflow.revisionHint")}>
               <Input value={String(cfg.revision_id ?? "")} onChange={(e) => onConfig("revision_id", e.target.value)} />
+            </Field>
+            <Field
+              label={t("workflow.deploymentTargets")}
+              hint={
+                certID
+                  ? t("workflow.deploymentTargetsHint")
+                  : upstreamCertID
+                    ? t("workflow.deploymentTargetsInheritHint", { certificate: certificateLabel(upstreamCertID) })
+                    : t("workflow.deploymentTargetsUnknownHint")
+              }
+              className={graphMode ? undefined : "sm:col-span-2"}
+            >
+              {deployLoading ? (
+                <p className="text-xs text-muted-foreground">{t("common.loading")}</p>
+              ) : deploymentTargets.length === 0 ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {targetCertID ? t("workflow.deploymentTargetsEmpty") : t("workflow.deploymentTargetsNone")}
+                </p>
+              ) : (
+                <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border bg-muted/20 p-2">
+                  {targetCertID ? (
+                    deploymentTargets.map(renderTarget)
+                  ) : (
+                    Array.from(new Set(deploymentTargets.map((d) => d.certificate_id)))
+                      .sort((a, b) => certificateLabel(a).localeCompare(certificateLabel(b)))
+                      .map((cid) => (
+                        <div key={cid} className="space-y-1">
+                          <p className="truncate px-1 pt-1 text-[11px] font-medium text-muted-foreground">
+                            {certificateLabel(cid)}
+                          </p>
+                          {deploymentTargets.filter((d) => d.certificate_id === cid).map(renderTarget)}
+                        </div>
+                      ))
+                  )}
+                </div>
+              )}
             </Field>
           </div>
         )}
@@ -815,7 +903,7 @@ function StepEditor({
         )}
 
         {step.type === "verify" && (
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className={`grid gap-3 ${graphMode ? "grid-cols-1" : "sm:grid-cols-2"}`}>
             <Field label={t("workflow.certificate")} hint={t("workflow.inheritHint")}>
               <Select value={certID} onChange={(e) => onConfig("certificate_id", e.target.value)}>
                 <option value="">{t("workflow.inherit")}</option>

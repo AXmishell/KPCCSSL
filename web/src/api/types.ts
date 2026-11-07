@@ -80,6 +80,7 @@ export interface Certificate {
   webroot: string | null;
   options: CertificateOptions;
   auto_renew: boolean;
+  auto_deploy: boolean;
   status: CertificateStatus;
   current_revision_id: string | null;
   next_renew_at: number | null;
@@ -179,6 +180,11 @@ export interface NotificationChannel {
   type: "smtp" | "webhook" | "telegram" | "feishu" | "dingtalk" | "wecom";
   events: string[];
   enabled: boolean;
+  public_config: Record<string, unknown>;
+  configured_fields: string[];
+  last_delivery_status?: string;
+  last_delivery_at?: number;
+  last_delivery_error?: string;
   created_at: number;
   updated_at: number;
 }
@@ -348,5 +354,6 @@ export interface CertInput {
   webroot?: string;
   options?: CertificateOptions;
   auto_renew: boolean;
+  auto_deploy?: boolean;
   version?: number;
 }

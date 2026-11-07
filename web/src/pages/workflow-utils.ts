@@ -55,7 +55,7 @@ export function defaultConfig(type: WorkflowStepType): Record<string, unknown> {
         force: false,
       };
     case "deploy":
-      return { certificate_id: "", revision_id: "" };
+      return { certificate_id: "", revision_id: "", deployment_ids: [] };
     case "notify":
       return { event: "workflow.notify", title: "", body: "" };
     case "verify":
@@ -155,6 +155,50 @@ export function stepsToGraph(steps: WorkflowStep[]): { nodes: GraphNode[]; edges
     x += 260;
   }
   return { nodes, edges };
+}
+
+/**
+ * Finds the certificate a deploy node inherits from its graph predecessors.
+ * Only explicit apply/verify certificate picks are considered; an inline
+ * certificate is created at run time, so no id can be resolved here. The
+ * nearest level with exactly one certificate wins, matching the backend BFS.
+ */
+export function upstreamCertificateID(
+  nodeID: string,
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+): string | undefined {
+  const byID = new Map(nodes.map((n) => [n.id, n]));
+  const incoming = new Map<string, string[]>();
+  for (const edge of edges) {
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge.from]);
+  }
+  const dist = new Map<string, number>([[nodeID, 0]]);
+  let frontier = [nodeID];
+  while (frontier.length) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const prev of incoming.get(id) ?? []) {
+        if (dist.has(prev)) continue;
+        dist.set(prev, (dist.get(id) ?? 0) + 1);
+        next.push(prev);
+      }
+    }
+    frontier = next;
+  }
+  for (let d = 1; d <= dist.size; d++) {
+    const found = new Set<string>();
+    for (const [id, idDist] of dist) {
+      if (idDist !== d) continue;
+      const node = byID.get(id);
+      if (!node || (node.type !== "apply" && node.type !== "verify")) continue;
+      const certID = String(node.config?.certificate_id ?? "").trim();
+      if (certID) found.add(certID);
+    }
+    if (found.size === 1) return [...found][0];
+    if (found.size > 1) return undefined;
+  }
+  return undefined;
 }
 
 export type FormIssue = { key: string; nodeID?: string; params?: Record<string, unknown> };

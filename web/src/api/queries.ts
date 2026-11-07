@@ -134,11 +134,12 @@ export function useJob(id?: string) {
   });
 }
 
-export function useDeployments(certId?: string) {
+export function useDeployments(certId?: string, enabled = true) {
   const search = certId ? `?certificate_id=${certId}` : "";
   return useQuery({
     queryKey: qk.deployments(certId),
     queryFn: () => request<{ items: Deployment[] }>(`/deployments${search}`),
+    enabled,
   });
 }
 
@@ -161,8 +162,8 @@ export function useAudit() {
   return useQuery({ queryKey: qk.audit, queryFn: () => request<Page<AuditLog>>("/audit-logs?limit=100") });
 }
 
-export function useSettings() {
-  return useQuery({ queryKey: qk.settings, queryFn: () => request<Record<string, unknown>>("/settings") });
+export function useSettings(enabled = true) {
+  return useQuery({ queryKey: qk.settings, queryFn: () => request<Record<string, unknown>>("/settings"), enabled });
 }
 
 export function useInfo() {

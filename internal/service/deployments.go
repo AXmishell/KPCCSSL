@@ -148,6 +148,12 @@ func (s *Service) DeployNow(ctx context.Context, certID, idem string) ([]*store.
 // DeployRevisionNow enqueues an explicit historical revision to every enabled
 // deployment target. It is used by workflow deploy steps.
 func (s *Service) DeployRevisionNow(ctx context.Context, certID, revisionID, idem string) ([]*store.Job, error) {
+	return s.DeployRevisionTargets(ctx, certID, revisionID, nil, idem)
+}
+
+// DeployRevisionTargets enqueues a revision to the selected deployment targets.
+// An empty deploymentIDs list means every enabled target of the certificate.
+func (s *Service) DeployRevisionTargets(ctx context.Context, certID, revisionID string, deploymentIDs []string, idem string) ([]*store.Job, error) {
 	if _, err := s.Store.GetCertificate(ctx, certID); err != nil {
 		return nil, err
 	}
@@ -162,14 +168,48 @@ func (s *Service) DeployRevisionNow(ctx context.Context, certID, revisionID, ide
 	if err != nil {
 		return nil, err
 	}
+	selected := make(map[string]bool, len(deploymentIDs))
+	for _, target := range deploymentIDs {
+		if target = strings.TrimSpace(target); target != "" {
+			selected[target] = true
+		}
+	}
+	// Reject unknown targets instead of silently deploying to every target or
+	// skipping a typo.
+	if len(selected) > 0 {
+		known := make(map[string]bool, len(deps))
+		for _, d := range deps {
+			known[d.ID] = true
+		}
+		for target := range selected {
+			if !known[target] {
+				return nil, fmt.Errorf("deployment target %s does not belong to this certificate", target)
+			}
+		}
+	}
 	var out []*store.Job
 	for _, d := range deps {
 		if !d.Enabled {
 			continue
 		}
+		if len(selected) > 0 && !selected[d.ID] {
+			continue
+		}
 		key := idem
 		if key != "" {
 			key = key + ":" + d.ID
+			// Revision-scoped keys are shared with automatic deploys. Reuse an
+			// in-flight or successful job, but allow a fresh attempt after a
+			// failure so a re-run is not pinned to the old error forever.
+			if existing, err := s.Store.GetJobByIdempotencyKey(ctx, key); err == nil {
+				switch existing.Status {
+				case "queued", "running", "succeeded":
+					out = append(out, existing)
+					continue
+				default:
+					key = key + ":retry:" + id.New()
+				}
+			}
 		}
 		j, _, err := s.Enqueue(ctx, "deploy", &certID, nil, map[string]string{"deployment_id": d.ID, "revision_id": rev.ID}, key, 3)
 		if err != nil {
@@ -178,6 +218,9 @@ func (s *Service) DeployRevisionNow(ctx context.Context, certID, revisionID, ide
 		out = append(out, j)
 	}
 	if len(out) == 0 {
+		if len(selected) > 0 {
+			return nil, errors.New("none of the selected deployment targets are enabled")
+		}
 		return nil, errors.New("no enabled deployment targets")
 	}
 	return out, nil

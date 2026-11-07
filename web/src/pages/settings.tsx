@@ -2,7 +2,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCA, useInfo, useSettings, useUsers } from "@/api/queries";
+import { qk, useCA, useInfo, useSettings, useUsers } from "@/api/queries";
 import { ApiError, errorMessage, request } from "@/api/client";
 import { useAuth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, Input, Select } from "@/components/ui/input";
 import { PageHeader, Spinner, Table, Td, Th } from "@/components/ui/misc";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { readTheme, useTheme, type Theme } from "@/lib/theme";
 
 export function SettingsPage() {
@@ -30,6 +30,11 @@ export function SettingsPage() {
   const [userOpen, setUserOpen] = React.useState(false);
   const [userBusy, setUserBusy] = React.useState(false);
   const [newUser, setNewUser] = React.useState({ email: "", password: "", role: "operator" });
+
+  const mailConfigured = Boolean(settings?.mail_configured);
+  const mailCredentialsAvailable = settings?.mail_credentials_available !== false;
+  const lastTestAt = Number(settings?.mail_last_test_at ?? 0);
+  const lastTestOK = settings?.mail_last_test_ok === true;
 
   React.useEffect(() => {
     if (!settings) return;
@@ -94,6 +99,7 @@ export function SettingsPage() {
       }
     } finally {
       setTestBusy(false);
+      void qc.invalidateQueries({ queryKey: qk.settings });
     }
   };
 
@@ -222,8 +228,15 @@ export function SettingsPage() {
       </div>
 
       <Card className="mt-6">
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>{t("settings.mail")}</CardTitle>
+          <Badge variant={!mailCredentialsAvailable ? "destructive" : mailConfigured ? "success" : "muted"}>
+            {!mailCredentialsAvailable
+              ? t("settings.mailCredentialsUnavailable")
+              : mailConfigured
+                ? t("settings.mailReady")
+                : t("settings.mailNotReady")}
+          </Badge>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">{t("settings.mailHint")}</p>
@@ -262,6 +275,11 @@ export function SettingsPage() {
               <Input value={form.smtp_from} onChange={(e) => setForm((f) => ({ ...f, smtp_from: e.target.value }))} placeholder="no-reply@example.com" />
             </Field>
           </div>
+          {form.smtp_tls === "none" && (
+            <p className="text-xs text-destructive">
+              {(form.smtp_username ?? "") !== "" ? t("settings.insecureAuth") : t("settings.insecureNone")}
+            </p>
+          )}
           <div className="flex flex-wrap items-end gap-2">
             <Button onClick={save} disabled={busy}>
               {t("common.save")}
@@ -279,6 +297,14 @@ export function SettingsPage() {
               </Button>
             </div>
           </div>
+          {lastTestAt > 0 && (
+            <p className={`text-xs ${lastTestOK ? "text-muted-foreground" : "text-destructive"}`}>
+              {t("settings.lastTest", {
+                time: formatDateTime(lastTestAt),
+                result: lastTestOK ? t("settings.lastTestOK") : t("settings.lastTestFailed"),
+              })}
+            </p>
+          )}
         </CardContent>
       </Card>
 

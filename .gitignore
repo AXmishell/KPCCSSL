@@ -7,6 +7,7 @@
 /.data/
 # 运行时的持久化数据，绝不入库
 /data/
+/deploy/data/
 /certs/
 /secrets/
 /.secrets/

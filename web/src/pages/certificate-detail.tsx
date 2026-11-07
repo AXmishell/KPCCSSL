@@ -84,7 +84,7 @@ export function CertificateDetailPage() {
     }
   };
 
-  const toggleRenew = async (enabled: boolean) => {
+  const patchSettings = async (patch: Partial<Pick<CertInput, "auto_renew" | "auto_deploy">>) => {
     if (!cert) return;
     const body: CertInput = {
       name: cert.name,
@@ -96,7 +96,9 @@ export function CertificateDetailPage() {
       dns_credential_id: cert.dns_credential_id ?? undefined,
       webroot: cert.webroot ?? undefined,
       options: cert.options,
-      auto_renew: enabled,
+      auto_renew: cert.auto_renew,
+      auto_deploy: cert.auto_deploy,
+      ...patch,
       version: cert.version,
     };
     try {
@@ -211,7 +213,14 @@ export function CertificateDetailPage() {
               <Info label={t("common.updatedAt")} value={formatDateTime(cert.updated_at)} />
               <div className="flex items-center justify-between rounded-md border border-border p-3 sm:col-span-2">
                 <span>{t("cert.autoRenew")}</span>
-                <Switch checked={cert.auto_renew} disabled={!canEdit} onCheckedChange={toggleRenew} aria-label={t("cert.autoRenew")} />
+                <Switch checked={cert.auto_renew} disabled={!canEdit} onCheckedChange={(v) => void patchSettings({ auto_renew: v })} aria-label={t("cert.autoRenew")} />
+              </div>
+              <div className="flex items-center justify-between rounded-md border border-border p-3 sm:col-span-2">
+                <span>
+                  {t("cert.autoDeploy")}
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{t("cert.autoDeployHint")}</span>
+                </span>
+                <Switch checked={cert.auto_deploy} disabled={!canEdit} onCheckedChange={(v) => void patchSettings({ auto_deploy: v })} aria-label={t("cert.autoDeploy")} />
               </div>
             </CardContent>
           </Card>

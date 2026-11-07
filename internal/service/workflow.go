@@ -144,10 +144,12 @@ type ApplyStepConfig struct {
 }
 
 // DeployStepConfig inherits the certificate from a previous apply step when
-// CertificateID is empty.
+// CertificateID is empty. DeploymentIDs limits the deploy to selected targets;
+// empty means every enabled target.
 type DeployStepConfig struct {
-	CertificateID string `json:"certificate_id,omitempty"`
-	RevisionID    string `json:"revision_id,omitempty"`
+	CertificateID string   `json:"certificate_id,omitempty"`
+	RevisionID    string   `json:"revision_id,omitempty"`
+	DeploymentIDs []string `json:"deployment_ids,omitempty"`
 }
 
 type NotifyStepConfig struct {

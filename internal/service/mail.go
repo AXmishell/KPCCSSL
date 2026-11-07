@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"time"
 
 	"github.com/axmishell/kpccssl/internal/notify"
 )
@@ -19,11 +20,19 @@ const (
 	SettingSMTPPassword = "smtp_password"
 	SettingSMTPFrom     = "smtp_from"
 	SettingSMTPTLS      = "smtp_tls"
+
+	// Internal settings used to surface the last test-mail result.
+	SettingMailLastTestAt = "mail_last_test_at"
+	SettingMailLastTestOK = "mail_last_test_ok"
 )
 
 // ErrMailNotConfigured is returned when transactional mail cannot be sent
 // because the SMTP settings are incomplete.
 var ErrMailNotConfigured = errors.New("outbound email is not configured")
+
+// ErrMailCredentialsUnavailable is returned when the stored SMTP password
+// cannot be decrypted (for example after a master-key change).
+var ErrMailCredentialsUnavailable = errors.New("outbound email credentials are unavailable")
 
 // MailError wraps a transport-level delivery failure.
 type MailError struct{ Err error }
@@ -40,7 +49,9 @@ func (s *Service) MailConfig(ctx context.Context) (notify.SMTPConfig, error) {
 		From:     strings.TrimSpace(s.SettingString(ctx, SettingSMTPFrom, "")),
 		TLS:      strings.TrimSpace(s.SettingString(ctx, SettingSMTPTLS, "starttls")),
 	}
-	if v, err := s.GetSetting(ctx, SettingSMTPPassword); err == nil {
+	if v, err := s.GetSetting(ctx, SettingSMTPPassword); err != nil {
+		return cfg, fmt.Errorf("%w: %v", ErrMailCredentialsUnavailable, err)
+	} else if v != nil {
 		if pw, ok := v.(string); ok {
 			cfg.Password = pw
 		}
@@ -48,23 +59,8 @@ func (s *Service) MailConfig(ctx context.Context) (notify.SMTPConfig, error) {
 	if cfg.Host == "" || cfg.From == "" {
 		return cfg, ErrMailNotConfigured
 	}
-	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return cfg, fmt.Errorf("invalid SMTP port")
-	}
-	from, err := mail.ParseAddress(cfg.From)
-	if err != nil {
-		return cfg, fmt.Errorf("invalid sender address")
-	}
-	// SMTPConfig uses From for both the envelope sender and the header, so keep
-	// the bare address and reject header injection attempts.
-	cfg.From = from.Address
-	if strings.ContainsAny(cfg.From, "\r\n") {
-		return cfg, fmt.Errorf("invalid sender address")
-	}
-	switch cfg.TLS {
-	case "tls", "starttls", "none":
-	default:
-		return cfg, fmt.Errorf("SMTP TLS mode must be tls, starttls or none")
+	if err := notify.ValidateSMTPConfig(&cfg, true, false); err != nil {
+		return cfg, err
 	}
 	return cfg, nil
 }
@@ -107,7 +103,12 @@ func (s *Service) SendMail(ctx context.Context, to, subject, body string) error 
 // TestMail sends a test message and surfaces configuration or transport
 // errors to the administrator.
 func (s *Service) TestMail(ctx context.Context, to string) error {
-	return s.SendMail(ctx, to, "KPCCSSL test email", "If you received this message, transactional email is configured correctly.")
+	err := s.SendMail(ctx, to, "KPCCSSL test email", "If you received this message, transactional email is configured correctly.")
+	// Store the outcome for the settings page. Failures are non-fatal: the
+	// original delivery error is what the caller needs to see.
+	_ = s.SetSetting(ctx, SettingMailLastTestAt, time.Now().Unix(), false)
+	_ = s.SetSetting(ctx, SettingMailLastTestOK, err == nil, false)
+	return err
 }
 
 // ValidMailSetting reports whether a key/value pair is acceptable before it is

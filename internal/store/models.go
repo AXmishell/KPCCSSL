@@ -66,6 +66,7 @@ type Certificate struct {
 	Webroot           *string  `json:"webroot"`
 	Options           Options  `json:"options"`
 	AutoRenew         bool     `json:"auto_renew"`
+	AutoDeploy        bool     `json:"auto_deploy"`
 	Status            string   `json:"status"`
 	CurrentRevisionID *string  `json:"current_revision_id"`
 	NextRenewAt       *int64   `json:"next_renew_at"`

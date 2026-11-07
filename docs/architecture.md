@@ -607,7 +607,7 @@ acme.sh 的插件没有统一元数据，需要自建一个静态目录（嵌入
 
 #### 6.6.1 首次启动
 
-- 无用户时进入 `/setup`。
+- 无用户时进入 `/install`。
 - 为防止公网抢注，启动时生成一次性 setup token，打印到容器日志（或要求环境变量 `KPCC_INITIAL_ADMIN_PASSWORD`）。
 - setup 完成后关闭该入口。
 - 强制管理员修改初始密码。
@@ -747,6 +747,8 @@ REST + JSON，异步操作返回 `202 Accepted` + `job_id`。
 
 **渠道**：SMTP、通用 Webhook（HMAC 签名）、Telegram、Feishu/钉钉/企业微信、ntfy（按需）。
 
+**SMTP 渠道边界**：通知 SMTP 默认引用“设置 → 邮件服务”的传输配置，只保存收件人；需要独立服务器时才保存完整配置。事务性邮件（密码重置/邮箱验证）与事件广播互不复用事件订阅、去重和重试语义。
+
 **通知可靠性**：
 
 - 事件表 + 发送记录，失败重试（退避），去重（事件 ID）。
@@ -807,6 +809,12 @@ REST + JSON，异步操作返回 `202 Accepted` + `job_id`。
 - 支持旧版 `steps`（v1 有序步骤）和 `nodes/edges`（v2 图）。v2 节点条件边支持 `success`、`failure`、`always`；没有入边的节点是起始节点。
 - 为避免“新增/删除节点后忘记连线导致提前执行”，v2 默认只允许一个起始节点；需要多个入口时必须显式设置 `allow_multiple_starts`。
 - `continue_on_error` 与旧版顺序执行保持一致：失败节点仍可被 `success` 边继续使用，且不会打开 `failure` 分支；最终运行状态为 `partial`。
+- **职责边界**：证书负责单证书生命周期（参数、签发/续期、吊销、下载、部署目标、`auto_renew`、`auto_deploy`）；流水线只做编排，不持有证书配置。
+- `auto_deploy` 默认开启，控制签发/续期成功后是否自动部署到所有启用目标；关闭后仅保留手动部署与流水线部署。
+- `deploy` 节点与自动部署共享 revision 级幂等键 `auto-deploy:<revision_id>:<deployment_id>`，`apply → deploy` 不会把同一版本部署两次；失败的历史任务不会被永久复用，重新运行会创建新任务。
+- `deploy` 节点可通过 `deployment_ids` 选择具体部署目标；留空表示部署该证书的全部启用目标。继承上游证书时也可以预选目标：上游节点显式引用证书时编辑器直接列出该证书的目标；上游为内联申请时目标在运行时才确定，所选目标必须属于上游证书，否则运行失败。
+- `apply` 节点按主域名内联创建证书时会复用已存在的证书；节点内的内联参数不会覆盖已有证书配置。
+- 到期续期仍由证书的 `auto_renew` 调度器负责；流水线定时触发只用于编排。不要让流水线 schedule 反复 apply 同一张开启自动续期的证书，否则会与续期任务争抢同一证书状态。
 - apply/deploy 只入队现有 job，并通过 job id 回查结果。apply 成功后会记录 `certificate_id` 和 `revision_id`；deploy/verify 优先继承上游节点的证书和 revision，避免并发续期导致部署错版本。
 - 每个工作流同一时间只允许一个 `queued/running` 运行（数据库唯一索引）。runner 使用 owner lease + heartbeat 支持 serve/worker 共享数据库以及崩溃后恢复。
 - 取消运行会取消该 run 的幂等键前缀下所有 `queued` job；正在运行的 job 无法被 worker 中断，但不会再启动后续步骤。

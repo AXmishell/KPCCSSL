@@ -11,6 +11,7 @@ import { Badge, statusVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorBox, PageHeader, Spinner, Table, Td, Th } from "@/components/ui/misc";
 import { fromNow } from "@/lib/format";
+import { CertSectionTabs } from "@/components/cert-tabs";
 import { WorkflowEditor } from "./workflow-editor";
 import { RunsDialog } from "./workflow-runs";
 
@@ -62,6 +63,7 @@ export function WorkflowsPage() {
 
   return (
     <div>
+      <CertSectionTabs />
       <PageHeader
         title={t("workflow.title")}
         subtitle={t("workflow.subtitle")}

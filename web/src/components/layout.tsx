@@ -6,7 +6,6 @@ import {
   BookOpenCheck,
   ClipboardList,
   FileCheck2,
-  GitBranch,
   Globe2,
   KeyRound,
   LayoutDashboard,
@@ -18,6 +17,7 @@ import {
   Sun,
   UserRound,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { readStoredTheme, useTheme, type Theme } from "@/lib/theme";
@@ -27,19 +27,37 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-const navItems = [
+type NavItem = {
+  to: string;
+  key: string;
+  icon: LucideIcon;
+  end?: boolean;
+  admin?: boolean;
+  /** Extra route prefixes that should highlight this entry. */
+  match?: string[];
+};
+
+const navItems: NavItem[] = [
   { to: "/", key: "dashboard", icon: LayoutDashboard, end: true },
-  { to: "/certificates", key: "certificates", icon: FileCheck2 },
+  // Certificates and workflows share one sidebar entry; the pages expose them
+  // as tabs.
+  { to: "/certificates", key: "certificates", icon: FileCheck2, match: ["/workflows"] },
   { to: "/jobs", key: "jobs", icon: ClipboardList },
   { to: "/ca-accounts", key: "ca", icon: Server },
   { to: "/dns-credentials", key: "dns", icon: Globe2 },
-  { to: "/deployments", key: "deployments", icon: Activity },
   { to: "/deployment-credentials", key: "deploymentCredentials", icon: KeyRound },
-  { to: "/workflows", key: "workflows", icon: GitBranch },
+  { to: "/deployments", key: "deployments", icon: Activity },
   { to: "/notifications", key: "notifications", icon: BookOpenCheck, admin: true },
   { to: "/audit", key: "audit", icon: ShieldCheck, admin: true },
   { to: "/settings", key: "settings", icon: Settings, admin: true },
 ];
+
+/** Reports whether a nav entry covers the given path, including sub-routes. */
+function navItemActive(item: NavItem, pathname: string) {
+  const hits = (prefix: string) =>
+    pathname === prefix || (!item.end && pathname.startsWith(prefix + "/"));
+  return hits(item.to) || (item.match ?? []).some(hits);
+}
 
 export function AppLayout() {
   const { t, i18n } = useTranslation();
@@ -69,6 +87,7 @@ export function AppLayout() {
   };
 
   const items = navItems.filter((item) => !item.admin || user?.role === "admin");
+  const currentItem = navItems.find((item) => navItemActive(item, location.pathname));
 
   const sidebar = (
     <div className="flex h-full flex-col">
@@ -88,7 +107,7 @@ export function AppLayout() {
             className={({ isActive }) =>
               cn(
                 "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                isActive
+                isActive || navItemActive(item, location.pathname)
                   ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
               )
@@ -127,7 +146,7 @@ export function AppLayout() {
       <aside className="hidden w-64 shrink-0 border-r border-border bg-card/40 lg:block">{sidebar}</aside>
 
       <Dialog open={mobileOpen} onOpenChange={setMobileOpen}>
-        <DialogContent className="left-0 top-0 h-full max-w-[18rem] translate-x-0 translate-y-0 rounded-none border-r p-0">
+        <DialogContent className="left-0 top-0 h-dvh max-h-none max-w-[18rem] translate-x-0 translate-y-0 rounded-none border-r p-0">
           <DialogTitle className="sr-only">Navigation</DialogTitle>
           {sidebar}
         </DialogContent>
@@ -139,7 +158,7 @@ export function AppLayout() {
             <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setMobileOpen(true)}>
               {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </Button>
-            <span className="text-sm text-muted-foreground">{t(`nav.${navItems.find((n) => n.to === location.pathname)?.key ?? "dashboard"}`, { defaultValue: "" })}</span>
+            <span className="text-sm text-muted-foreground">{t(`nav.${currentItem?.key ?? "dashboard"}`)}</span>
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="sm" onClick={toggleLang} title={t("common.language")}>

@@ -29,6 +29,7 @@ const schema = z
     dns_credential_id: z.string().optional(),
     webroot: z.string().optional(),
     auto_renew: z.boolean(),
+    auto_deploy: z.boolean(),
     preferred_chain: z.string().optional(),
     dns_alias: z.string().optional(),
     dns_sleep: z.coerce.number().min(0).max(3600),
@@ -54,7 +55,7 @@ type FormInput = z.input<typeof schema>;
 
 const challenges: ChallengeType[] = ["dns-01", "http-01-webroot", "http-01-standalone", "tls-alpn-01"];
 const stepFields: (keyof FormValues)[][] = [
-  ["name", "key_type", "ca_account_id", "auto_renew"],
+  ["name", "key_type", "ca_account_id", "auto_renew", "auto_deploy"],
   ["primary_domain", "sans"],
   ["challenge_type", "dns_credential_id", "webroot"],
   ["preferred_chain", "dns_alias", "dns_sleep", "always_new_key", "must_staple"],
@@ -91,6 +92,7 @@ export function CertificateNewPage() {
       dns_credential_id: "",
       webroot: "",
       auto_renew: true,
+      auto_deploy: true,
       preferred_chain: "",
       dns_alias: "",
       dns_sleep: 30,
@@ -131,6 +133,7 @@ export function CertificateNewPage() {
         must_staple: v.must_staple,
       },
       auto_renew: v.auto_renew,
+      auto_deploy: v.auto_deploy,
     };
     try {
       const cert = await request<Certificate>("/certificates", { method: "POST", body });
@@ -221,6 +224,13 @@ export function CertificateNewPage() {
                 <label className="flex items-center justify-between rounded-md border border-border p-3">
                   <span className="text-sm">{t("cert.autoRenew")}</span>
                   <Switch checked={values.auto_renew} onCheckedChange={(v) => setValue("auto_renew", v)} aria-label={t("cert.autoRenew")} />
+                </label>
+                <label className="flex items-center justify-between rounded-md border border-border p-3">
+                  <span className="text-sm">
+                    {t("cert.autoDeploy")}
+                    <span className="mt-0.5 block text-xs text-muted-foreground">{t("cert.autoDeployHint")}</span>
+                  </span>
+                  <Switch checked={values.auto_deploy} onCheckedChange={(v) => setValue("auto_deploy", v)} aria-label={t("cert.autoDeploy")} />
                 </label>
               </>
             )}
@@ -320,6 +330,10 @@ export function CertificateNewPage() {
                   <div>
                     <dt className="text-muted-foreground">{t("cert.autoRenew")}</dt>
                     <dd>{values.auto_renew ? t("common.yes") : t("common.no")}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">{t("cert.autoDeploy")}</dt>
+                    <dd>{values.auto_deploy ? t("common.yes") : t("common.no")}</dd>
                   </div>
                 </dl>
                 <label className="flex items-center justify-between rounded-md border border-border p-3">

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { EmptyState, PageHeader, Spinner, Table, Td, Th } from "@/components/ui/misc";
 import { daysUntil, formatDate, fromNow } from "@/lib/format";
+import { CertSectionTabs } from "@/components/cert-tabs";
 
 export function CertificatesPage() {
   const { t, i18n } = useTranslation();
@@ -25,6 +26,7 @@ export function CertificatesPage() {
 
   return (
     <div>
+      <CertSectionTabs />
       <PageHeader
         title={t("cert.title")}
         subtitle={t("cert.subtitle")}

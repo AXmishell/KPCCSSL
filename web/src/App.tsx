@@ -23,7 +23,7 @@ import { ForgotPasswordPage } from "@/pages/forgot-password";
 import { ResetPasswordPage } from "@/pages/reset-password";
 import { ConfirmEmailPage } from "@/pages/confirm-email";
 
-const publicPaths = ["/login", "/setup", "/forgot-password", "/reset-password", "/confirm-email"];
+const publicPaths = ["/login", "/install", "/forgot-password", "/reset-password", "/confirm-email"];
 
 function Splash() {
   return (
@@ -38,18 +38,18 @@ export function App() {
   const location = useLocation();
 
   if (loading) return <Splash />;
-  if (setupRequired && location.pathname !== "/setup") return <Navigate to="/setup" replace />;
+  if (setupRequired && location.pathname !== "/install") return <Navigate to="/install" replace />;
   if (!user && !publicPaths.includes(location.pathname)) {
     return <Navigate to="/login" replace />;
   }
-  if (user && (location.pathname === "/login" || location.pathname === "/setup")) {
+  if (user && (location.pathname === "/login" || location.pathname === "/install")) {
     return <Navigate to="/" replace />;
   }
 
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/setup" element={<SetupPage />} />
+      <Route path="/install" element={<SetupPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/confirm-email" element={<ConfirmEmailPage />} />

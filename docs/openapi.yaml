@@ -849,11 +849,39 @@ paths:
                   events:
                     type: array
                     items: { type: string }
+    post:
+      operationId: createNotificationChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, type, config, events]
+              properties:
+                name: { type: string }
+                type: { type: string, enum: [smtp, webhook, telegram, feishu, dingtalk, wecom] }
+                config:
+                  type: object
+                  additionalProperties: true
+                  description: Channel-specific settings. SMTP fields follow NotificationSMTPConfig.
+                events:
+                  type: array
+                  items: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationChannel" }
+        "422": { $ref: "#/components/responses/Problem" }
   /notification-channels/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }
     patch:
       operationId: updateNotificationChannel
+      description: Partial update. Omitted config fields keep their stored values; the channel type cannot be changed.
       requestBody:
         required: true
         content:
@@ -863,7 +891,10 @@ paths:
               properties:
                 name: { type: string }
                 type: { type: string }
-                config: { type: object, additionalProperties: true }
+                config:
+                  type: object
+                  additionalProperties: true
+                  description: Partial channel config. Omitted fields keep their stored values.
                 events:
                   type: array
                   items: { type: string }
@@ -1228,6 +1259,7 @@ components:
         dns_credential_id: { type: [string, "null"] }
         webroot: { type: [string, "null"] }
         auto_renew: { type: boolean }
+        auto_deploy: { type: boolean }
         status: { type: string, enum: [draft, queued, issuing, active, renewing, failed, revoked, disabled] }
         current_revision_id: { type: [string, "null"] }
         next_renew_at: { type: [integer, "null"] }
@@ -1259,6 +1291,7 @@ components:
             always_new_key: { type: boolean }
             must_staple: { type: boolean }
         auto_renew: { type: boolean }
+        auto_deploy: { type: boolean }
         version: { type: integer }
     CertificateEvent:
       type: object
@@ -1433,6 +1466,37 @@ components:
           type: array
           items: { type: string }
         enabled: { type: boolean }
+        public_config:
+          type: object
+          additionalProperties: true
+          description: Non-secret channel settings, safe to show in the UI.
+        configured_fields:
+          type: array
+          items: { type: string }
+          description: Names of configured fields; secret values are never returned.
+        last_delivery_status: { type: string, enum: [pending, sent, failed] }
+        last_delivery_at: { type: integer }
+        last_delivery_error: { type: string }
+    NotificationSMTPConfig:
+      type: object
+      description: |
+        SMTP channel config. With use_system_mail=true only to/from are stored;
+        host, port, tls, username and password are resolved from the settings
+        table at send time. Independent channels must provide host, from and to.
+      properties:
+        use_system_mail: { type: boolean }
+        host: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535, default: 587 }
+        tls: { type: string, enum: [tls, starttls, none], default: starttls }
+        username: { type: string }
+        password: { type: string }
+        from: { type: string, format: email }
+        to:
+          type: array
+          items: { type: string, format: email }
+        allow_insecure_auth:
+          type: boolean
+          description: Allow AUTH over a plaintext connection. Only for trusted relays.
     WorkflowStep:
       type: object
       required: [id, type]

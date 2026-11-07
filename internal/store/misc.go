@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 )
 
 // ListNotificationChannels returns all channels.
@@ -100,6 +101,23 @@ func (s *Store) ClaimDelivery(ctx context.Context, id, channelID, eventType, eve
 func (s *Store) FinishDelivery(ctx context.Context, id, status string, attempts int, lastErr *string, now int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE notification_deliveries SET status=?,attempts=?,last_error=?,sent_at=? WHERE id=?`, status, attempts, lastErr, now, id)
 	return err
+}
+
+// LastNotificationDelivery returns the most recent delivery status for a
+// channel. It returns empty values when the channel has never been used.
+func (s *Store) LastNotificationDelivery(ctx context.Context, channelID string) (string, *int64, *string, error) {
+	var status string
+	var at int64
+	var lastErr sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT status,COALESCE(sent_at,created_at),last_error FROM notification_deliveries
+		WHERE channel_id=? ORDER BY created_at DESC LIMIT 1`, channelID).Scan(&status, &at, &lastErr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, nil, nil
+	}
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return status, &at, nullPtr(lastErr), nil
 }
 
 const notifyCols = `SELECT id,name,type,config_enc,key_version,events_json,enabled,created_at,updated_at FROM notification_channels`

@@ -12,6 +12,7 @@
 ## 凭据与密钥
 
 - DNS 凭据、部署凭据（云厂商/面板/SSH）、EAB HMAC、SMTP/Webhook/Telegram/飞书/钉钉/企业微信密钥、TOTP secret 使用 AES-256-GCM 加密，AAD 绑定记录与字段。
+- SMTP 默认要求 STARTTLS；`tls=none` 仅用于不需要认证的可信中继。配置了用户名密码却使用明文连接时，设置页面和通知渠道都会拒绝发送（通知渠道需显式设置 `allow_insecure_auth` 才能覆盖）。
 - 主密钥位于 `<data_dir>/master.key`（0600），或通过 `KPCC_MASTER_KEY` 注入。文件支持多版本 keyring；`kpccssl admin rotate-key` 会追加新版本并保留旧版本用于解密。
 - 没有 `master.key` 时，上述加密数据全部无法解密；备份时必须单独离线保存，并与数据库分开存放。
 - 每次任务使用临时 `--accountconf`，任务结束后删除；并清理 acme.sh 配置中的 `SAVED_*`、`CA_EAB_*` 残留。

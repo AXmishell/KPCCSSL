@@ -625,7 +625,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]service.NotificationView, 0, len(items))
 	for _, c := range items {
-		out = append(out, service.NotificationChannelView(c))
+		out = append(out, s.Svc.NotificationChannelView(r.Context(), c))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out, "events": service.SupportedEvents()})
 }
@@ -642,7 +642,7 @@ func (s *Server) createNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "notification.create", "notification_channel", c.ID, "ok", c.Type)
-	writeJSON(w, http.StatusCreated, service.NotificationChannelView(*c))
+	writeJSON(w, http.StatusCreated, s.Svc.NotificationChannelView(r.Context(), *c))
 }
 
 func (s *Server) updateNotification(w http.ResponseWriter, r *http.Request) {
@@ -657,7 +657,7 @@ func (s *Server) updateNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "notification.update", "notification_channel", c.ID, "ok", "")
-	writeJSON(w, http.StatusOK, service.NotificationChannelView(*c))
+	writeJSON(w, http.StatusOK, s.Svc.NotificationChannelView(r.Context(), *c))
 }
 
 func (s *Server) deleteNotification(w http.ResponseWriter, r *http.Request) {
@@ -674,7 +674,17 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.Svc.TestNotification(r.Context(), id); err != nil {
 		s.audit(r, "notification.test", "notification_channel", id, "error", err.Error())
-		s.fail(w, r, err)
+		var notifyErr *service.NotificationError
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			writeProblem(w, r, http.StatusNotFound, "E_NOT_FOUND", "resource not found", nil)
+		case errors.Is(err, service.ErrMailNotConfigured):
+			writeProblem(w, r, http.StatusUnprocessableEntity, "E_MAIL_NOT_CONFIGURED", "outbound email is not configured", nil)
+		case errors.As(err, &notifyErr):
+			writeProblem(w, r, http.StatusBadGateway, "E_NOTIFY", "could not send test notification", nil)
+		default:
+			s.fail(w, r, err)
+		}
 		return
 	}
 	s.audit(r, "notification.test", "notification_channel", id, "ok", "")
@@ -697,8 +707,19 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
 
+func (s *Server) settingsView(ctx context.Context) (map[string]any, error) {
+	view, err := s.Svc.SettingsView(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, cfgErr := s.Svc.MailConfig(ctx)
+	view["mail_configured"] = cfgErr == nil
+	view["mail_credentials_available"] = !errors.Is(cfgErr, service.ErrMailCredentialsUnavailable)
+	return view, nil
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
-	view, err := s.Svc.SettingsView(r.Context())
+	view, err := s.settingsView(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -742,7 +763,7 @@ func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.audit(r, "settings.update", "settings", "", "ok", "")
-	view, _ := s.Svc.SettingsView(r.Context())
+	view, _ := s.settingsView(r.Context())
 	writeJSON(w, http.StatusOK, view)
 }
 

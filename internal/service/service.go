@@ -71,6 +71,18 @@ func New(cfg *config.Config, st *store.Store, box *secret.Box, engine acme.Engin
 		Limiter: auth.NewLimiter(), DNS: dnsprovider.Load(cfg.ACMEBin),
 		MailSender: notify.SendSMTP,
 	}
+	if notifier != nil {
+		notifier.SystemMail = s.MailConfig
+		// Resolve the current MailSender on every call so tests can replace
+		// Service.MailSender after construction.
+		notifier.MailSender = func(ctx context.Context, cfg notify.SMTPConfig, subject, body string) error {
+			sender := s.MailSender
+			if sender == nil {
+				sender = notify.SendSMTP
+			}
+			return sender(ctx, cfg, subject, body)
+		}
+	}
 	token := cfg.SetupToken
 	if token == "" {
 		b := make([]byte, 24)

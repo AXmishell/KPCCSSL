@@ -70,9 +70,9 @@ func (s *Store) CreateCertificate(ctx context.Context, c *Certificate) error {
 	san, _ := json.Marshal(c.SAN)
 	opts, _ := json.Marshal(c.Options)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO certificates
-		(id,name,primary_domain,san_json,key_type,ca_account_id,challenge_type,dns_credential_id,webroot,options_json,auto_renew,status,current_revision_id,next_renew_at,last_error_code,last_error_message,version,deleted_at,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.Name, c.PrimaryDomain, string(san), c.KeyType, c.CAAccountID, c.ChallengeType, c.DNSCredentialID, c.Webroot, string(opts), boolInt(c.AutoRenew), c.Status, c.CurrentRevisionID, c.NextRenewAt, c.LastErrorCode, c.LastErrorMessage, c.Version, c.DeletedAt, c.CreatedAt, c.UpdatedAt)
+		(id,name,primary_domain,san_json,key_type,ca_account_id,challenge_type,dns_credential_id,webroot,options_json,auto_renew,auto_deploy,status,current_revision_id,next_renew_at,last_error_code,last_error_message,version,deleted_at,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		c.ID, c.Name, c.PrimaryDomain, string(san), c.KeyType, c.CAAccountID, c.ChallengeType, c.DNSCredentialID, c.Webroot, string(opts), boolInt(c.AutoRenew), boolInt(c.AutoDeploy), c.Status, c.CurrentRevisionID, c.NextRenewAt, c.LastErrorCode, c.LastErrorMessage, c.Version, c.DeletedAt, c.CreatedAt, c.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create certificate: %w", err)
 	}
@@ -85,9 +85,9 @@ func (s *Store) UpdateCertificate(ctx context.Context, c *Certificate) error {
 	san, _ := json.Marshal(c.SAN)
 	opts, _ := json.Marshal(c.Options)
 	res, err := s.db.ExecContext(ctx, `UPDATE certificates SET
-		name=?,primary_domain=?,san_json=?,key_type=?,ca_account_id=?,challenge_type=?,dns_credential_id=?,webroot=?,options_json=?,auto_renew=?,version=version+1,updated_at=?
+		name=?,primary_domain=?,san_json=?,key_type=?,ca_account_id=?,challenge_type=?,dns_credential_id=?,webroot=?,options_json=?,auto_renew=?,auto_deploy=?,version=version+1,updated_at=?
 		WHERE id=? AND version=? AND deleted_at IS NULL`,
-		c.Name, c.PrimaryDomain, string(san), c.KeyType, c.CAAccountID, c.ChallengeType, c.DNSCredentialID, c.Webroot, string(opts), boolInt(c.AutoRenew), c.UpdatedAt, c.ID, c.Version)
+		c.Name, c.PrimaryDomain, string(san), c.KeyType, c.CAAccountID, c.ChallengeType, c.DNSCredentialID, c.Webroot, string(opts), boolInt(c.AutoRenew), boolInt(c.AutoDeploy), c.UpdatedAt, c.ID, c.Version)
 	if err != nil {
 		return err
 	}
@@ -238,15 +238,15 @@ func (s *Store) CertificateStats(ctx context.Context) (total, expiring, failed, 
 	return
 }
 
-const certCols = `SELECT id,name,primary_domain,san_json,key_type,ca_account_id,challenge_type,dns_credential_id,webroot,options_json,auto_renew,status,current_revision_id,next_renew_at,last_error_code,last_error_message,version,deleted_at,created_at,updated_at FROM certificates`
+const certCols = `SELECT id,name,primary_domain,san_json,key_type,ca_account_id,challenge_type,dns_credential_id,webroot,options_json,auto_renew,auto_deploy,status,current_revision_id,next_renew_at,last_error_code,last_error_message,version,deleted_at,created_at,updated_at FROM certificates`
 
 func (s *Store) scanCert(row interface{ Scan(...any) error }) (*Certificate, error) {
 	var c Certificate
 	var sanJSON, optsJSON, status string
 	var cred, webroot, current, code, msg sql.NullString
 	var nextRenew, deleted sql.NullInt64
-	var renew int
-	if err := row.Scan(&c.ID, &c.Name, &c.PrimaryDomain, &sanJSON, &c.KeyType, &c.CAAccountID, &c.ChallengeType, &cred, &webroot, &optsJSON, &renew, &c.Status, &current, &nextRenew, &code, &msg, &c.Version, &deleted, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	var renew, autoDeploy int
+	if err := row.Scan(&c.ID, &c.Name, &c.PrimaryDomain, &sanJSON, &c.KeyType, &c.CAAccountID, &c.ChallengeType, &cred, &webroot, &optsJSON, &renew, &autoDeploy, &c.Status, &current, &nextRenew, &code, &msg, &c.Version, &deleted, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, notFound(err)
 	}
 	_ = status
@@ -256,6 +256,7 @@ func (s *Store) scanCert(row interface{ Scan(...any) error }) (*Certificate, err
 	}
 	_ = json.Unmarshal([]byte(optsJSON), &c.Options)
 	c.AutoRenew = renew != 0
+	c.AutoDeploy = autoDeploy != 0
 	c.DNSCredentialID = nullPtr(cred)
 	c.Webroot = nullPtr(webroot)
 	c.CurrentRevisionID = nullPtr(current)

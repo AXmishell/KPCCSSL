@@ -239,6 +239,8 @@ func TestEndToEndIssueFlow(t *testing.T) {
 			Status            string  `json:"status"`
 			CurrentRevisionID *string `json:"current_revision_id"`
 			NextRenewAt       *int64  `json:"next_renew_at"`
+			AutoDeploy        bool    `json:"auto_deploy"`
+			Version           int     `json:"version"`
 		} `json:"certificate"`
 		CurrentRevision *struct {
 			NotAfter int64  `json:"not_after"`
@@ -254,6 +256,36 @@ func TestEndToEndIssueFlow(t *testing.T) {
 	}
 	if detail.CurrentRevision.NotAfter <= time.Now().Unix() {
 		t.Fatal("certificate already expired")
+	}
+	if !detail.Certificate.AutoDeploy {
+		t.Fatal("auto_deploy should default to true")
+	}
+
+	// auto_deploy is explicit and an omitted value preserves the stored one.
+	update := map[string]any{
+		"name": "example", "primary_domain": "example.com", "san": []string{"www.example.com"},
+		"key_type": "ec-256", "ca_account_id": ca.ID, "challenge_type": "dns-01",
+		"dns_credential_id": dns.ID, "auto_renew": true, "auto_deploy": false,
+		"version": detail.Certificate.Version,
+	}
+	data = h.mustDo(t, "PATCH", "/certificates/"+cert.ID, update, h.csrf, http.StatusOK)
+	var patched struct {
+		AutoDeploy bool `json:"auto_deploy"`
+		Version    int  `json:"version"`
+	}
+	_ = json.Unmarshal(data, &patched)
+	if patched.AutoDeploy {
+		t.Fatalf("auto_deploy not updated: %s", data)
+	}
+	delete(update, "auto_deploy")
+	update["version"] = patched.Version
+	data = h.mustDo(t, "PATCH", "/certificates/"+cert.ID, update, h.csrf, http.StatusOK)
+	var preserved struct {
+		AutoDeploy bool `json:"auto_deploy"`
+	}
+	_ = json.Unmarshal(data, &preserved)
+	if preserved.AutoDeploy {
+		t.Fatalf("omitted auto_deploy should preserve the stored value: %s", data)
 	}
 
 	// Repeat the same idempotency key: same job, no new issuance.
@@ -571,6 +603,162 @@ func TestDeploymentLocalFile(t *testing.T) {
 	}
 }
 
+func TestWorkflowDeployTargetSelection(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	allow := h.svc.Cfg.DeployRoots[0]
+	now := store.Now()
+	ca := &store.CAAccount{ID: "ca-targets", Name: "CA", DirectoryURL: "https://ca", Status: "registered", KeyVersion: 1, TOSAcceptedAt: &now, CreatedAt: now, UpdatedAt: now}
+	if err := h.store.CreateCAAccount(context.Background(), ca); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := h.svc.CreateDNS(context.Background(), service.DNSInput{Name: "cf", Provider: "dns_cf", Config: map[string]string{"CF_Token": "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := h.svc.CreateCertificate(context.Background(), service.CertInput{
+		Name: "targets", PrimaryDomain: "targets.example.com", KeyType: "ec-256", CAAccountID: ca.ID,
+		ChallengeType: "dns-01", DNSCredentialID: cred.ID, AutoRenew: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Issue before creating deployment targets so auto-deploy does not run.
+	if _, _, err := h.svc.Enqueue(context.Background(), "issue", &cert.ID, &ca.ID, map[string]any{}, "", 1); err != nil {
+		t.Fatal(err)
+	}
+	h.drainJobs(t)
+
+	dirs := []string{filepath.Join(allow, "selected"), filepath.Join(allow, "skipped")}
+	var deploymentIDs []string
+	for i, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cfg := fmt.Sprintf(`{"directory":%q,"cert_file":"cert.pem","key_file":"privkey.pem","chain_file":"chain.pem","fullchain_file":"fullchain.pem","mode":"0640","backup":true}`, dir)
+		data = h.mustDo(t, "POST", "/deployments", map[string]any{
+			"certificate_id": cert.ID, "name": fmt.Sprintf("target-%d", i), "type": "local_file", "config": json.RawMessage(cfg), "enabled": true,
+		}, me.CSRF, http.StatusCreated)
+		var dep struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal(data, &dep)
+		deploymentIDs = append(deploymentIDs, dep.ID)
+	}
+
+	data = h.mustDo(t, "POST", "/workflows", map[string]any{
+		"name": "deploy selected", "enabled": true, "trigger_type": "manual",
+		"definition": map[string]any{
+			"version": 2,
+			"nodes": []map[string]any{{
+				"id": "deploy", "type": "deploy",
+				"config": map[string]any{"certificate_id": cert.ID, "deployment_ids": []string{deploymentIDs[0]}},
+			}},
+			"edges": []any{},
+		},
+	}, me.CSRF, http.StatusCreated)
+	var wf struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &wf)
+	data = h.mustDo(t, "POST", "/workflows/"+wf.ID+"/run", map[string]any{}, me.CSRF, http.StatusAccepted)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(data, &started)
+	wfRunner := service.NewWorkflowRunner(h.svc)
+	for i := 0; i < 20; i++ {
+		_, _ = wfRunner.RunOnce(context.Background())
+		h.drainJobs(t)
+	}
+	data = h.mustDo(t, "GET", "/workflow-runs/"+started.RunID, nil, "", http.StatusOK)
+	var detail struct {
+		Run struct {
+			Status string `json:"status"`
+		} `json:"run"`
+	}
+	_ = json.Unmarshal(data, &detail)
+	if detail.Run.Status != "succeeded" {
+		t.Fatalf("workflow run = %s: %s", detail.Run.Status, data)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], "cert.pem")); err != nil {
+		t.Fatalf("selected target was not deployed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[1], "cert.pem")); !os.IsNotExist(err) {
+		t.Fatalf("unselected target should not receive files, stat err = %v", err)
+	}
+}
+
+func TestWorkflowDeployTargetValidation(t *testing.T) {
+	h := newHarness(t)
+	data := h.mustDo(t, "POST", "/setup", map[string]string{"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple"}, "", http.StatusCreated)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(data, &me)
+
+	ctx := context.Background()
+	allow := h.svc.Cfg.DeployRoots[0]
+	now := store.Now()
+	ca := &store.CAAccount{ID: "ca-target-validation", Name: "CA", DirectoryURL: "https://ca", Status: "registered", KeyVersion: 1, TOSAcceptedAt: &now, CreatedAt: now, UpdatedAt: now}
+	if err := h.store.CreateCAAccount(ctx, ca); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := h.svc.CreateDNS(ctx, service.DNSInput{Name: "cf", Provider: "dns_cf", Config: map[string]string{"CF_Token": "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := h.svc.CreateCertificate(ctx, service.CertInput{
+		Name: "validation", PrimaryDomain: "validation.example.com", KeyType: "ec-256", CAAccountID: ca.ID,
+		ChallengeType: "dns-01", DNSCredentialID: cred.ID, AutoRenew: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.svc.Enqueue(ctx, "issue", &cert.ID, &ca.ID, map[string]any{}, "", 1); err != nil {
+		t.Fatal(err)
+	}
+	h.drainJobs(t)
+	cert, err = h.store.GetCertificate(ctx, cert.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert.CurrentRevisionID == nil {
+		t.Fatal("certificate has no revision")
+	}
+
+	// A disabled target is valid to configure but cannot be deployed to.
+	dir := filepath.Join(allow, "disabled")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fmt.Sprintf(`{"directory":%q,"cert_file":"cert.pem","key_file":"privkey.pem","chain_file":"chain.pem","fullchain_file":"fullchain.pem","mode":"0640","backup":true}`, dir)
+	data = h.mustDo(t, "POST", "/deployments", map[string]any{
+		"certificate_id": cert.ID, "name": "disabled", "type": "local_file", "config": json.RawMessage(cfg), "enabled": false,
+	}, me.CSRF, http.StatusCreated)
+	var dep struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &dep)
+
+	// A target that does not belong to this certificate is rejected.
+	_, err = h.svc.DeployRevisionTargets(ctx, cert.ID, *cert.CurrentRevisionID, []string{"01NOTMYTARGET"}, "")
+	if err == nil || !strings.Contains(err.Error(), "does not belong to this certificate") {
+		t.Fatalf("foreign target error = %v", err)
+	}
+
+	// Selecting a disabled target must not silently deploy to nothing.
+	_, err = h.svc.DeployRevisionTargets(ctx, cert.ID, *cert.CurrentRevisionID, []string{dep.ID}, "")
+	if err == nil || !strings.Contains(err.Error(), "none of the selected deployment targets are enabled") {
+		t.Fatalf("disabled target error = %v", err)
+	}
+}
+
 func TestPasswordResetAndEmailChange(t *testing.T) {
 	h := newHarness(t)
 	h.mustDo(t, "POST", "/setup", map[string]string{
@@ -663,4 +851,178 @@ func TestPasswordResetAndEmailChange(t *testing.T) {
 		t.Fatalf("old email still works: %d", status)
 	}
 	h.login(t, "new@example.com", newPassword)
+}
+
+func TestNotificationSMTPConfigBoundary(t *testing.T) {
+	h := newHarness(t)
+	h.mustDo(t, "POST", "/setup", map[string]string{
+		"token": "setup-token", "email": "admin@example.com", "password": "correct-horse-battery-staple",
+	}, "", http.StatusCreated)
+	csrf := h.login(t, "admin@example.com", "correct-horse-battery-staple")
+	ctx := context.Background()
+
+	// The settings view must expose whether transactional mail is usable.
+	data := h.mustDo(t, "GET", "/settings", nil, "", http.StatusOK)
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["mail_configured"] != false {
+		t.Fatalf("mail_configured = %v, want false", settings["mail_configured"])
+	}
+
+	// A channel that inherits the system transport only stores recipients.
+	data = h.mustDo(t, "POST", "/notification-channels", map[string]any{
+		"name": "ops mail", "type": "smtp",
+		"config": map[string]any{"use_system_mail": true, "to": []string{"ops@example.com"}},
+		"events": []string{"*"}, "enabled": true,
+	}, csrf, http.StatusCreated)
+	var inherited struct {
+		ID           string         `json:"id"`
+		PublicConfig map[string]any `json:"public_config"`
+		Configured   []string       `json:"configured_fields"`
+	}
+	if err := json.Unmarshal(data, &inherited); err != nil {
+		t.Fatal(err)
+	}
+	if inherited.PublicConfig["use_system_mail"] != true {
+		t.Fatalf("use_system_mail = %v", inherited.PublicConfig["use_system_mail"])
+	}
+	if _, ok := inherited.PublicConfig["password"]; ok {
+		t.Fatal("password exposed in public_config")
+	}
+
+	// A partial update keeps use_system_mail and changes only the recipients.
+	data = h.mustDo(t, "PATCH", "/notification-channels/"+inherited.ID, map[string]any{
+		"config": map[string]any{"to": []string{"oncall@example.com"}},
+	}, csrf, http.StatusOK)
+	var updated struct {
+		PublicConfig map[string]any `json:"public_config"`
+	}
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.PublicConfig["use_system_mail"] != true {
+		t.Fatalf("partial update lost use_system_mail: %v", updated.PublicConfig)
+	}
+	if to, _ := updated.PublicConfig["to"].([]any); len(to) != 1 || to[0] != "oncall@example.com" {
+		t.Fatalf("to = %#v", updated.PublicConfig["to"])
+	}
+
+	// Changing the channel type is rejected instead of leaving stale config.
+	status, _ := h.do(t, "PATCH", "/notification-channels/"+inherited.ID, map[string]any{"type": "webhook"}, csrf)
+	if status != http.StatusBadRequest {
+		t.Fatalf("type change status = %d, want 400", status)
+	}
+
+	// Independent SMTP configs persist transport defaults.
+	data = h.mustDo(t, "POST", "/notification-channels", map[string]any{
+		"name": "direct mail", "type": "smtp",
+		"config": map[string]any{
+			"host": "smtp.example.com", "from": "Ops <ops@example.com>",
+			"to": []string{"a@example.com"}, "username": "user", "password": "secret",
+		},
+		"events": []string{"certificate.issued"}, "enabled": true,
+	}, csrf, http.StatusCreated)
+	var direct struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &direct); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := h.store.GetNotificationChannel(ctx, direct.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := h.svc.Box.Decrypt(ch.ConfigEnc, "notification_channels:"+ch.ID+":config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg notify.SMTPConfig
+	if err := json.Unmarshal(plain, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 587 || cfg.TLS != "starttls" {
+		t.Fatalf("defaults not persisted: port=%d tls=%q", cfg.Port, cfg.TLS)
+	}
+	if cfg.From != "ops@example.com" {
+		t.Fatalf("from = %q, want bare address", cfg.From)
+	}
+
+	// The list exposes the last delivery error for troubleshooting.
+	if ok, err := h.store.ClaimDelivery(ctx, "01TESTDELIVERY", direct.ID, "certificate.issued", "test-key", store.Now()); err != nil || !ok {
+		t.Fatalf("claim delivery: ok=%v err=%v", ok, err)
+	}
+	deliveryErr := "smtp dial: connection refused"
+	if err := h.store.FinishDelivery(ctx, "01TESTDELIVERY", "failed", 1, &deliveryErr, store.Now()); err != nil {
+		t.Fatal(err)
+	}
+	data = h.mustDo(t, "GET", "/notification-channels", nil, "", http.StatusOK)
+	var listed struct {
+		Items []struct {
+			ID                 string  `json:"id"`
+			LastDeliveryStatus string  `json:"last_delivery_status"`
+			LastDeliveryError  *string `json:"last_delivery_error"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &listed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range listed.Items {
+		if item.ID != direct.ID {
+			continue
+		}
+		found = true
+		if item.LastDeliveryStatus != "failed" {
+			t.Fatalf("last_delivery_status = %q", item.LastDeliveryStatus)
+		}
+		if item.LastDeliveryError == nil || *item.LastDeliveryError != deliveryErr {
+			t.Fatalf("last_delivery_error = %v", item.LastDeliveryError)
+		}
+	}
+	if !found {
+		t.Fatal("created channel missing from list")
+	}
+
+	// Plaintext authentication must be rejected unless explicitly allowed.
+	status, _ = h.do(t, "POST", "/notification-channels", map[string]any{
+		"name": "insecure", "type": "smtp",
+		"config": map[string]any{
+			"host": "smtp.example.com", "from": "ops@example.com",
+			"to": []string{"a@example.com"}, "username": "user", "tls": "none",
+		},
+		"events": []string{"*"}, "enabled": true,
+	}, csrf)
+	if status != http.StatusBadRequest {
+		t.Fatalf("insecure auth status = %d, want 400", status)
+	}
+
+	// Configuring the system transport makes the inherited channel testable.
+	h.mustDo(t, "PATCH", "/settings", map[string]any{
+		"smtp_host": "smtp.example.com", "smtp_port": 587,
+		"smtp_username": "mailer", "smtp_password": "secret",
+		"smtp_from": "no-reply@example.com", "smtp_tls": "starttls",
+	}, csrf, http.StatusOK)
+	type sentMail struct {
+		Host, From string
+		To         []string
+	}
+	sent := make(chan sentMail, 1)
+	h.svc.MailSender = func(_ context.Context, cfg notify.SMTPConfig, _, _ string) error {
+		sent <- sentMail{Host: cfg.Host, From: cfg.From, To: cfg.To}
+		return nil
+	}
+	h.mustDo(t, "POST", "/notification-channels/"+inherited.ID+"/test", map[string]any{}, csrf, http.StatusNoContent)
+	select {
+	case got := <-sent:
+		if got.Host != "smtp.example.com" || got.From != "no-reply@example.com" {
+			t.Fatalf("inherited transport = %#v", got)
+		}
+		if len(got.To) != 1 || got.To[0] != "oncall@example.com" {
+			t.Fatalf("recipients = %#v", got.To)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("test notification was not delivered")
+	}
 }

@@ -7,6 +7,7 @@ import {
   fromWorkflow,
   newNode,
   stepsToGraph,
+  upstreamCertificateID,
   validateEditForm,
 } from "./workflow-utils";
 
@@ -65,6 +66,34 @@ describe("workflow editor utils", () => {
     const duplicate = validForm();
     duplicate.edges.push({ id: "e3", from: duplicate.edges[0].from, to: duplicate.edges[0].to, condition: "always" });
     expect(validateEditForm(duplicate).some((issue) => issue.key === "workflow.validation.duplicateEdge")).toBe(true);
+  });
+
+  it("resolves the certificate inherited by a deploy node", () => {
+    const form = validForm();
+    const [apply, deploy, notify] = form.nodes;
+    expect(upstreamCertificateID(deploy.id, form.nodes, form.edges)).toBe("cert-1");
+
+    // Transparent intermediate nodes do not break the lookup.
+    form.edges = [
+      { id: "e1", from: apply.id, to: notify.id, condition: "success" },
+      { id: "e2", from: notify.id, to: deploy.id, condition: "success" },
+    ];
+    expect(upstreamCertificateID(deploy.id, form.nodes, form.edges)).toBe("cert-1");
+
+    // An inline apply has no certificate id until run time.
+    apply.config = { ...apply.config, certificate_id: "" };
+    expect(upstreamCertificateID(deploy.id, form.nodes, form.edges)).toBeUndefined();
+
+    // Two different certificates at the same distance are ambiguous.
+    apply.config = { ...apply.config, certificate_id: "cert-1" };
+    const other = newNode("apply", { x: 80, y: 260 });
+    other.config = { ...defaultConfig("apply"), certificate_id: "cert-2" };
+    form.nodes.push(other);
+    form.edges = [
+      { id: "e1", from: apply.id, to: deploy.id, condition: "success" },
+      { id: "e2", from: other.id, to: deploy.id, condition: "success" },
+    ];
+    expect(upstreamCertificateID(deploy.id, form.nodes, form.edges)).toBeUndefined();
   });
 
   it("converts legacy ordered steps into a connected graph", () => {

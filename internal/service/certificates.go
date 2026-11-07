@@ -39,7 +39,11 @@ type CertInput struct {
 	Webroot         string        `json:"webroot"`
 	Options         store.Options `json:"options"`
 	AutoRenew       bool          `json:"auto_renew"`
-	Version         int           `json:"version"`
+	// AutoDeploy controls whether a successful issue/renew deploys to the
+	// certificate's enabled targets. nil keeps the existing value on update and
+	// defaults to true on create.
+	AutoDeploy *bool `json:"auto_deploy"`
+	Version    int   `json:"version"`
 }
 
 // CreateCertificate validates and stores a draft certificate.
@@ -52,6 +56,9 @@ func (s *Service) CreateCertificate(ctx context.Context, in CertInput) (*store.C
 	c.ID = id.New()
 	c.Status = "draft"
 	c.Version = 1
+	if in.AutoDeploy == nil {
+		c.AutoDeploy = true
+	}
 	c.CreatedAt, c.UpdatedAt = now, now
 	if err := s.Store.CreateCertificate(ctx, c); err != nil {
 		return nil, mapCertDomainErr(err)
@@ -77,6 +84,9 @@ func (s *Service) UpdateCertificate(ctx context.Context, id string, in CertInput
 	c.Version = existing.Version
 	if in.Version == 0 {
 		c.Version = existing.Version
+	}
+	if in.AutoDeploy == nil {
+		c.AutoDeploy = existing.AutoDeploy
 	}
 	c.CreatedAt = existing.CreatedAt
 	c.UpdatedAt = store.Now()
@@ -117,6 +127,9 @@ func (s *Service) buildCertificate(ctx context.Context, in CertInput, certID str
 		Name: strings.TrimSpace(in.Name), PrimaryDomain: primary, SAN: sans,
 		KeyType: in.KeyType, CAAccountID: in.CAAccountID, ChallengeType: in.ChallengeType,
 		Options: in.Options, AutoRenew: in.AutoRenew,
+	}
+	if in.AutoDeploy != nil {
+		c.AutoDeploy = *in.AutoDeploy
 	}
 	if len(c.Name) > 100 || strings.ContainsAny(c.Name, "\r\n\x00") {
 		return nil, errors.New("invalid certificate name")
@@ -774,6 +787,10 @@ func (s *Service) ReadPrivateKeyFile(rev *store.Revision) ([]byte, error) {
 }
 
 func (s *Service) enqueueDeployments(ctx context.Context, certID, revisionID string) {
+	c, err := s.Store.GetCertificate(ctx, certID)
+	if err != nil || !c.AutoDeploy {
+		return
+	}
 	deps, err := s.Store.ListDeployments(ctx, certID)
 	if err != nil {
 		return
@@ -782,7 +799,9 @@ func (s *Service) enqueueDeployments(ctx context.Context, certID, revisionID str
 		if !d.Enabled {
 			continue
 		}
-		key := "auto-deploy:" + d.ID + ":" + revisionID
+		// The revision-scoped key is shared with workflow deploy steps so an
+		// apply→deploy pipeline reuses this job instead of deploying twice.
+		key := "auto-deploy:" + revisionID + ":" + d.ID
 		_, _, _ = s.Enqueue(ctx, "deploy", &certID, nil, map[string]string{"deployment_id": d.ID, "revision_id": revisionID}, key, 3)
 	}
 }
